@@ -1,0 +1,29 @@
+# 매핑 릴레이: ROS2 토픽 구독 -> 로컬 UDP(50000) -> receiver.py
+# ROS2 환경이 필요하므로 setup 스크립트를 source 한 뒤 실행한다.
+[Unit]
+Description=Robot mapping relay (ROS2 topics -> receiver.py)
+After=network-online.target robot-receiver.service
+Wants=network-online.target
+StartLimitIntervalSec=0
+# receiver 가 먼저 떠 있어야 릴레이 데이터가 소비된다.
+PartOf=robot-receiver.service
+
+[Service]
+Type=simple
+User=root
+Environment=PYTHONUNBUFFERED=1
+
+WorkingDirectory=/opt/robot/receiver
+# bash -lc 로 감싸는 이유: setup_ros2.sh 가 환경변수를 export 하므로 셸이 필요하다.
+# exec 를 붙여야 python3 가 PID 1 을 이어받아 systemd 의 정지 신호를 직접 받는다.
+ExecStart=/bin/bash -lc 'source /opt/robot/scripts/setup_ros2.sh && exec /usr/bin/python3 /opt/robot/receiver/relay_map.py'
+
+Restart=always
+RestartSec=5
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=robot-relay-map
+
+[Install]
+WantedBy=multi-user.target

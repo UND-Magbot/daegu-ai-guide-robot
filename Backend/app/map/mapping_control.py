@@ -1,0 +1,853 @@
+"""
+맵핑 제어 API
+─────────────
+[Frontend 버튼] → [FastAPI API] → [SSH to NOS(106)] → bash 명령 실행
+                                                          ↓
+ [DB에 경로 저장] ← [static/maps에 저장] ← [SCP로 파일 가져오기]
+"""
+
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.orm import Session
+from pydantic import BaseModel, field_validator
+
+from app.database.database import get_db
+from app.database.models import RobotMapInfo, UserInfo
+from app.auth.dependencies import require_permission
+from app.cluster.deps import require_robot_available
+
+from dotenv import load_dotenv
+import paramiko
+import os
+import re
+import shlex
+import time
+
+# 로컬(비 docker) 실행 시 .env 로드 — docker 에서는 compose environment 로 주입됨.
+# 루트(.env) 와 Backend/.env 둘 다 시도하여 어디에 두든 동작하게 한다.
+_BACKEND_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+load_dotenv(os.path.join(_BACKEND_ROOT, ".env"))
+load_dotenv(os.path.join(os.path.dirname(_BACKEND_ROOT), ".env"))
+
+mapping_ctrl = APIRouter(prefix="/map/mapping")
+
+# ── NOS SSH 설정 (환경변수로 분리 — .env / docker-compose 에서 주입) ──
+# 대상은 **로봇 NOS**다. drmap 명령과 맵 디렉토리(/var/opt/robot/data/maps)가 여기 있다.
+# 중계 Jetson 을 여기에 넣으면 drmap 이 없어 매핑이 조용히 아무것도 하지 않는다.
+NOS_HOST = os.getenv("NOS_HOST", "10.21.31.106")
+NOS_PORT = int(os.getenv("NOS_PORT", "22"))
+NOS_USER = os.getenv("NOS_USER", "")
+NOS_PASSWORD = os.getenv("NOS_PASSWORD", "")
+
+if not NOS_USER or not NOS_PASSWORD:
+    print("[WARN] NOS_USER/NOS_PASSWORD 환경변수가 비어 있습니다. "
+          "매핑 SSH(시작/종료/취소)가 인증 실패할 수 있습니다. .env 를 확인하세요.")
+
+# ── 릴레이 호스트 SSH 설정 ──
+# relay_map.py 는 로봇 NOS 가 아니라 **중계 Jetson** 에서 도는 현장이 있다(ROS2 DDS 로
+# 로봇 토픽이 보이므로 어느 쪽에서 돌든 동작한다). 매핑 명령과 호스트·계정이 다르므로
+# 접속 정보를 따로 받는다. 비워 두면 NOS_* 를 그대로 써서 기존 단일 호스트 현장과 호환된다.
+RELAY_HOST = os.getenv("RELAY_HOST", "").strip() or NOS_HOST
+RELAY_PORT = int(os.getenv("RELAY_PORT", "").strip() or NOS_PORT)
+RELAY_USER = os.getenv("RELAY_USER", "").strip() or NOS_USER
+RELAY_PASSWORD = os.getenv("RELAY_PASSWORD", "") or NOS_PASSWORD
+
+# ── NOS 상의 매핑 관련 경로 ──
+NOS_MAP_BASE_DIR = "/var/opt/robot/data/maps"
+NOS_PGM_FILENAME = "occ_grid.pgm"
+NOS_YAML_FILENAME = "occ_grid.yaml"
+
+# ── relay_map.py(실시간 매핑 시각화 릴레이) 자동 기동 설정 ──
+# 매핑 시작 시 로봇에서 relay_map.py 를 자동 기동한다(미실행 시). 종료/취소 시 정리한다.
+# relay 가 떠 있어야 ROS2 SLAM 토픽 → UDP(50000) → receiver.py(40000) → 백엔드 WS →
+# 브라우저 캔버스로 실시간 점군/odom 이 그려진다. 경로는 .env/docker-compose 에서 덮어쓴다.
+NOS_RELAY_SCRIPT = os.getenv("NOS_RELAY_SCRIPT", "/home/user/Control_system/relay_map.py")
+NOS_ROS2_SETUP = os.getenv("NOS_ROS2_SETUP", "/opt/robot/scripts/setup_ros2.sh")
+NOS_RELAY_LOG = os.getenv("NOS_RELAY_LOG", "/tmp/relay_map.log")
+
+# ── 로컬 저장 경로 ──
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+LOCAL_MAPS_DIR = os.path.join(BASE_DIR, "static", "maps")
+
+# ── 매핑 상태 (SSH 클라이언트는 저장하지 않음 — 매번 새로 연결) ──
+# prev_active: 매핑 시작 직전의 active 심볼릭 링크 대상(이전 정상 맵).
+#   drmap mapping 은 새 맵 디렉토리를 만들고 active 를 거기로 물리므로,
+#   종료(/end)하지 않고 취소·새로고침으로 중단되면 active 가 미완결 맵에 고착된다.
+#   → 중단 시 이 값으로 active 를 복원(초기화)하기 위해 시작 시 스냅샷해 둔다.
+mapping_state = {
+    "is_running": False,
+    "map_name": None,
+    "business_id": None,
+    "floor_id": None,
+    "prev_active": None,
+}
+
+
+# ── 맵 이름 검증 ──
+# 맵 이름은 SSH 로 실행하는 bash 명령(drmap -n, ls, rm -rf) 에 그대로 들어간다.
+# 셸 메타문자가 섞이면 로봇에서 임의 명령이 실행되므로 화이트리스트로 막고,
+# 명령 조립 시에는 추가로 shlex.quote 를 건다(이중 방어).
+# 길이 100 = DB robot_map_info.MapName Column(String(100)) 과 동일.
+MAP_NAME_MAX_LEN = 100
+MAP_NAME_PATTERN = re.compile(r"^[0-9A-Za-z가-힣][0-9A-Za-z가-힣 ._-]{0,99}$")
+
+
+def validate_map_name(name: str) -> str:
+    """맵 이름을 검증하고 앞뒤 공백을 제거한 값을 돌려준다."""
+    value = (name or "").strip()
+    if not value:
+        raise ValueError("맵 이름을 입력해주세요.")
+    if len(value) > MAP_NAME_MAX_LEN:
+        raise ValueError(f"맵 이름은 {MAP_NAME_MAX_LEN}자 이하여야 합니다.")
+    if not MAP_NAME_PATTERN.match(value):
+        raise ValueError(
+            "맵 이름은 한글·영문·숫자로 시작하고, 공백과 . _ - 만 사용할 수 있습니다."
+        )
+    return value
+
+
+def _map_dir_prefix(map_name: str) -> str:
+    """`{맵베이스}/{맵이름}-` 을 셸 안전하게 인용한 문자열(뒤에 `*/` 를 붙여 glob).
+
+    인용부호 밖에 glob 만 남으므로 `'/base/name-'*/` 형태로 매칭은 그대로 동작한다.
+    """
+    return shlex.quote(f"{NOS_MAP_BASE_DIR}/{map_name}-")
+
+
+# 로봇별 NOS는 로봇 IP와 같은 /24 대역의 이 호스트 옥텟에 있다(기본 .106).
+NOS_HOST_OCTET = os.getenv("NOS_HOST_OCTET", "106")
+
+
+def nos_host_for_robot_ip(robot_ip: str) -> str:
+    """로봇 IP 기준으로 그 로봇의 NOS(맵 서버) 호스트를 유도한다.
+
+    예: 10.21.31.103(로봇 컨트롤러) → 10.21.31.106(해당 로봇의 NOS).
+    유효하지 않은 IP(빈값·127.0.0.1 등)면 ValueError.
+    """
+    parts = (robot_ip or "").strip().split(".")
+    if len(parts) != 4 or not all(p.isdigit() and 0 <= int(p) <= 255 for p in parts):
+        raise ValueError(f"유효하지 않은 로봇 IP: {robot_ip!r}")
+    if parts[0] == "127":
+        raise ValueError(f"로컬호스트 IP는 맵 서버가 없습니다: {robot_ip!r}")
+    return f"{parts[0]}.{parts[1]}.{parts[2]}.{NOS_HOST_OCTET}"
+
+
+def get_ssh_client(
+    retries=10,
+    host: str | None = None,
+    port: int | None = None,
+    username: str | None = None,
+    password: str | None = None,
+):
+    """NOS에 SSH 연결 (불안정 네트워크 대비 — 최대 10회 재시도).
+
+    host 미지정 시 env NOS_HOST(기본/매핑용). 가져오기 등 로봇별 작업은
+    nos_host_for_robot_ip() 로 유도한 호스트를 넘긴다.
+    계정을 넘기면 그것을 쓴다 — 릴레이 호스트처럼 NOS 와 자격증명이 다른 장비용.
+    """
+    target = host or NOS_HOST
+    target_port = port or NOS_PORT
+    target_user = username or NOS_USER
+    target_password = password if password is not None else NOS_PASSWORD
+    last_error = None
+    for attempt in range(1, retries + 1):
+        try:
+            client = paramiko.SSHClient()
+            client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            client.connect(
+                hostname=target,
+                port=target_port,
+                username=target_user,
+                password=target_password,
+                timeout=5,
+                banner_timeout=5,
+                auth_timeout=5,
+                allow_agent=False,
+                look_for_keys=False,
+            )
+            if attempt > 1:
+                print(f"[SSH] {attempt}번째 시도에서 연결 성공")
+            return client
+        except Exception as e:
+            last_error = e
+            print(f"[SSH] 연결 실패 {target} ({attempt}/{retries}): {e}")
+            if attempt < retries:
+                time.sleep(3)
+    raise last_error
+
+
+def get_relay_ssh_client(retries=3):
+    """relay_map.py 가 도는 호스트에 SSH 연결.
+
+    RELAY_* 가 비어 있으면 NOS_* 와 같아지므로 단일 호스트 현장에서는 기존과 동일하다.
+    """
+    return get_ssh_client(
+        retries=retries,
+        host=RELAY_HOST,
+        port=RELAY_PORT,
+        username=RELAY_USER,
+        password=RELAY_PASSWORD,
+    )
+
+
+class SSHCommandError(Exception):
+    """원격 명령이 0 이 아닌 종료코드로 끝났다. `check=True` 일 때만 발생한다."""
+
+    def __init__(self, command: str, exit_status: int, output: str):
+        self.command = command
+        self.exit_status = exit_status
+        self.output = output
+        super().__init__(f"원격 명령 실패(exit {exit_status}): {output[:200] or command[:200]}")
+
+
+def ssh_exec(
+    client: paramiko.SSHClient,
+    command: str,
+    exec_timeout=60,
+    sudo_password: str | None = None,
+    check: bool = False,
+) -> str:
+    """SSH 명령 실행 후 stdout 반환 (sudo 비밀번호 자동 입력).
+
+    sudo_password 를 넘기면 그것을 쓴다 — 릴레이 호스트처럼 NOS 와 계정이 다른 장비용.
+
+    check=True 면 종료코드를 확인해 0 이 아닐 때 SSHCommandError 를 던진다.
+    기본값이 False 인 이유는 호출부 상당수가 "없으면 비어 있음"을 정상으로 쓰기 때문이다
+    (pkill 미매칭=1, readlink 없음=1, tail 파일없음=1 …). **반드시 성공해야 하는 명령**
+    (drmap 매핑 시작/종료)에만 켠다.
+    ⚠️ get_pty=True 라 stderr 가 stdout 으로 합쳐진다. 그래서 종료코드를 보지 않으면
+       `drmap: command not found` 같은 실패가 흔적 없이 성공으로 취급된다(실제 사고 사례).
+    """
+    secret = sudo_password if sudo_password is not None else NOS_PASSWORD
+    stdin, stdout, stderr = client.exec_command(command, get_pty=True, timeout=exec_timeout)
+    if command.strip().startswith("sudo") or "sudo " in command:
+        time.sleep(0.5)
+        stdin.write(secret + "\n")
+        stdin.flush()
+    output = stdout.read().decode("utf-8").strip()
+    error = stderr.read().decode("utf-8").strip()
+    if error:
+        print(f"[SSH STDERR] {error}")
+    # sudo 프롬프트/패스워드 에코 제거
+    lines = output.split("\n")
+    cleaned = [l for l in lines if not l.startswith("[sudo]") and l != secret]
+    result = "\n".join(cleaned).strip()
+
+    if check:
+        # recv_exit_status() 는 채널이 닫힐 때까지 블록하지만, 위에서 stdout 을 끝까지
+        # 읽었으므로 이미 종료된 상태다.
+        status = stdout.channel.recv_exit_status()
+        if status != 0:
+            print(f"[SSH] 명령 실패(exit {status}): {command}")
+            raise SSHCommandError(command, status, result or error)
+    return result
+
+
+# 점검(pgrep)·정리(pkill)는 [m] 브래킷 트릭으로 패턴을 만들어, 명령 자신의
+# 셸 프로세스가 패턴에 매칭되어 오탐되는 것을 방지한다.
+_RELAY_CHECK = ("sudo bash -c 'pgrep -f \"relay_[m]ap.py\" > /dev/null "
+                "&& echo RUNNING || echo STOPPED'")
+
+
+def _relay_running(relay: paramiko.SSHClient) -> bool:
+    status = ssh_exec(relay, _RELAY_CHECK, exec_timeout=10, sudo_password=RELAY_PASSWORD)
+    return "RUNNING" in status
+
+
+def _kill_relay(relay: paramiko.SSHClient) -> None:
+    """relay 프로세스를 확실히 끊는다.
+
+    SIGTERM 만으로는 부족하다. 구버전 relay_map.py 는 UDP 루프가 `while True` 라
+    rclpy 만 내려가고 프로세스가 살아남는다 — ROS 구독이 끊긴 **좀비**다.
+    그 좀비는 모든 질의에 빈 `{}` 를 답하면서 pgrep 에는 "실행 중"으로 잡혀,
+    다음 매핑에서 재기동되지 않고 캔버스가 조용히 빈 화면이 된다(실제 사고 사례).
+    → 남아 있으면 -9 로 확실히 끊는다.
+    """
+    ssh_exec(relay, "sudo bash -c 'pkill -f \"relay_[m]ap.py\"'",
+             exec_timeout=10, sudo_password=RELAY_PASSWORD)
+    time.sleep(1.0)
+    if _relay_running(relay):
+        print("[WARN] relay_map.py 가 SIGTERM 으로 끝나지 않음 — SIGKILL 로 정리")
+        ssh_exec(relay, "sudo bash -c 'pkill -9 -f \"relay_[m]ap.py\"'",
+                 exec_timeout=10, sudo_password=RELAY_PASSWORD)
+        time.sleep(0.5)
+
+
+def start_relay_map(client: paramiko.SSHClient | None = None, force: bool = False) -> None:
+    """relay_map.py(실시간 매핑 릴레이)를 기동한다.
+
+    릴레이는 매핑 명령과 **다른 호스트**에서 돌 수 있다(drmap=로봇 NOS, relay=중계 Jetson).
+    그래서 넘겨받은 매핑 client 를 쓰지 않고 RELAY_* 로 전용 접속을 연다.
+    `client` 인자는 기존 호출부 호환을 위해 남겨두며 사용하지 않는다.
+
+    force=True 면 살아 있어도 먼저 정리하고 새로 띄운다. 세션 시작(매핑/위치 재조정)에는
+    이쪽을 쓴다 — "프로세스가 있다"는 것만으로는 ROS 구독이 살아있다는 보장이 못 되고,
+    릴레이는 상태를 갖지 않아 재기동 비용이 거의 없기 때문이다.
+
+    relay 기동에 실패해도 drmap 매핑/저장 자체는 정상 진행되어야 하므로,
+    예외를 삼키고 경고만 남긴다(실패 시 실시간 캔버스만 비고 매핑은 계속).
+    """
+    relay = None
+    try:
+        relay = get_relay_ssh_client()
+        if force:
+            _kill_relay(relay)
+        elif _relay_running(relay):
+            print(f"📡 relay_map.py 이미 실행 중({RELAY_HOST}) — 자동 기동 생략")
+            return
+
+        # ROS2 환경 source 후 백그라운드로 기동.
+        #    ⚠️ ssh_exec 는 get_pty=True 라 채널이 닫힐 때 PTY 세션 전체에 SIGHUP 이 가서
+        #       백그라운드 relay 가 즉시 죽는다(로그 파일조차 안 생김). 따라서 여기서는
+        #       **PTY 없이(get_pty=False)** + sudo -S(stdin 비번) + setsid + </dev/null 로
+        #       제어터미널에서 완전히 분리해 기동한다(채널 종료와 무관하게 생존).
+        inner = f"source {NOS_ROS2_SETUP} && exec python3 -u {NOS_RELAY_SCRIPT}"
+        launch = (f"sudo -S bash -c 'setsid bash -c \"{inner}\" "
+                  f"> {NOS_RELAY_LOG} 2>&1 < /dev/null &'")
+        stdin, _stdout, _stderr = relay.exec_command(launch, get_pty=False, timeout=15)
+        stdin.write(RELAY_PASSWORD + "\n")   # sudo -S 비밀번호
+        stdin.flush()
+        time.sleep(2)                       # 비번 처리 + setsid 분리 시간 확보
+        try:
+            stdin.channel.shutdown_write()
+        except Exception:
+            pass
+        print(f"📡 relay_map.py 자동 기동 @{RELAY_HOST} (PTY 없이 detach, 로그: {NOS_RELAY_LOG})")
+    except Exception as e:
+        print(f"[WARN] relay_map.py 자동 기동 실패(매핑은 계속 진행): {e}")
+    finally:
+        if relay is not None:
+            try: relay.close()
+            except Exception: pass
+
+
+def stop_relay_map(client: paramiko.SSHClient | None = None) -> None:
+    """매핑 종료/취소 시 relay_map.py 를 정리한다(실패는 무시).
+
+    start_relay_map 과 같은 이유로 릴레이 호스트에 직접 접속한다.
+    좀비를 남기지 않도록 _kill_relay 로 SIGTERM → (잔존 시) SIGKILL 까지 밟는다.
+    """
+    relay = None
+    try:
+        relay = get_relay_ssh_client()
+        _kill_relay(relay)
+        print(f"📴 relay_map.py 종료 @{RELAY_HOST}")
+    except Exception as e:
+        print(f"[WARN] relay_map.py 종료 실패: {e}")
+    finally:
+        if relay is not None:
+            try: relay.close()
+            except Exception: pass
+
+
+def read_active_target(client: paramiko.SSHClient) -> str:
+    """현재 active 심볼릭 링크가 실제로 가리키는 경로를 반환(없으면 '')."""
+    try:
+        return ssh_exec(client, f"readlink -f {NOS_MAP_BASE_DIR}/active 2>/dev/null").strip()
+    except Exception as e:
+        print(f"[WARN] active 링크 조회 실패: {e}")
+        return ""
+
+
+def map_dir_is_complete(client: paramiko.SSHClient, map_dir: str) -> bool:
+    """맵 디렉토리가 완전한지(localization 로드 가능) 판정 — full_cloud.pcd 존재로 본다.
+
+    매핑이 완료 전 중단되면 blocks/ 만 있고 full_cloud.pcd(매핑 종료 시 생성)가 없어,
+    이 맵을 active 로 걸면 localization 이 맵을 못 불러와 로봇 pose 가 발산한다.
+    """
+    if not map_dir:
+        return False
+    try:
+        r = ssh_exec(
+            client, f"test -f {shlex.quote(map_dir + '/full_cloud.pcd')} && echo OK || echo NO"
+        ).strip()
+        return r.endswith("OK")
+    except Exception as e:
+        print(f"[WARN] 맵 완전성 확인 실패({map_dir}): {e}")
+        return False
+
+
+def restore_active(client: paramiko.SSHClient, target: str) -> bool:
+    """active 링크를 이전 정상 맵(target)으로 복원하고 localization 재시작.
+
+    - target 이 없거나/디렉토리가 사라졌거나/미완성 맵이면, 깨진 맵을 가리키지 않도록 active 를 제거(초기화).
+    - ⚠️ active 가 (심볼릭이 아니라) 실제 디렉토리로 깨져 있을 수 있다(매핑 중단 잔재). 이때 `rm -f`는
+      디렉토리를 못 지워 교체가 먹히지 않으므로 `rm -rf`로 제거한다(후행 슬래시 없음 → 심볼릭이면 링크만 제거).
+    - 복원 성공 시 True.
+    """
+    if not target:
+        try:
+            ssh_exec(client, f"sudo rm -rf {NOS_MAP_BASE_DIR}/active")
+            print("[MAP] 복원 대상 없음 — active 링크 제거(초기화)")
+        except Exception as e:
+            print(f"[WARN] active 링크 제거 실패: {e}")
+        return False
+    try:
+        exists = ssh_exec(client, f"test -d {shlex.quote(target)} && echo OK || echo NO").strip()
+        if not exists.endswith("OK"):
+            ssh_exec(client, f"sudo rm -rf {NOS_MAP_BASE_DIR}/active")
+            print(f"[MAP] 이전 active 대상 없음({target}) — active 링크 제거(초기화)")
+            return False
+        if not map_dir_is_complete(client, target):
+            ssh_exec(client, f"sudo rm -rf {NOS_MAP_BASE_DIR}/active")
+            print(f"[MAP] 복원 대상이 미완성 맵({target}, full_cloud.pcd 없음) — active 제거(초기화)")
+            return False
+        ssh_exec(
+            client,
+            f"sudo rm -rf {NOS_MAP_BASE_DIR}/active && "
+            f"sudo ln -s {shlex.quote(target)} {NOS_MAP_BASE_DIR}/active",
+        )
+        ssh_exec(client, "sudo systemctl restart localization")
+        print(f"[MAP] active 복원: → {target} (localization 재시작)")
+        return True
+    except Exception as e:
+        print(f"[WARN] active 복원 실패: {e}")
+        return False
+
+
+# ══════════════════════════════════════
+# 공용 헬퍼 — 로봇 맵 목록 조회 / 다운로드 (매핑 종료·가져오기 공용)
+# ══════════════════════════════════════
+import re as _re
+
+_MAP_DIR_TS = _re.compile(r"^(?P<name>.+)-(?P<ts>\d{8}-\d{6})$")
+
+
+def list_robot_maps(client: paramiko.SSHClient) -> list[dict]:
+    """NOS의 맵 베이스 디렉토리를 나열하여 맵 목록을 반환한다.
+
+    각 항목: {dir, name, created_at, complete(pgm+yaml 존재), has_zip, is_active}
+    - complete=False 는 매핑 중단 등 미완결 맵(가져오기 불가, 표시는 가능).
+    - is_active 는 NOS의 active 심볼릭 링크 대상과 일치하는 디렉토리.
+    """
+    active = read_active_target(client)
+    # 한 번의 SSH 호출로 디렉토리별 (zip/완료/수정시각)을 한 줄씩 출력
+    script = (
+        "sudo bash -c '"
+        f"cd {NOS_MAP_BASE_DIR} 2>/dev/null || exit 0; "
+        "for d in */; do d=${d%/}; "
+        "[ \"$d\" = active ] && continue; "
+        f"c=NO; [ -e \"$d/{NOS_PGM_FILENAME}\" ] && [ -e \"$d/{NOS_YAML_FILENAME}\" ] && c=YES; "
+        "z=NO; [ -e \"$d.zip\" ] && z=YES; "
+        "t=$(stat -c %Y \"$d\" 2>/dev/null); "
+        "echo \"$d|$c|$z|$t\"; done'"
+    )
+    out = ssh_exec(client, script, exec_timeout=30)
+    maps: list[dict] = []
+    for line in out.split("\n"):
+        line = line.strip()
+        if not line or "|" not in line:
+            continue
+        parts = line.split("|")
+        if len(parts) < 4:
+            continue
+        d, c, z, t = parts[0], parts[1], parts[2], parts[3]
+        m = _MAP_DIR_TS.match(d)
+        if m:
+            name = m.group("name")
+            ts = m.group("ts")
+            created_at = f"{ts[0:4]}-{ts[4:6]}-{ts[6:8]} {ts[9:11]}:{ts[11:13]}:{ts[13:15]}"
+        else:
+            name = d
+            created_at = ""
+        full = f"{NOS_MAP_BASE_DIR}/{d}"
+        maps.append({
+            "dir": d,
+            "name": name,
+            "created_at": created_at,
+            "complete": (c == "YES"),
+            "has_zip": (z == "YES"),
+            "is_active": bool(active) and (active == full or os.path.basename(active) == d),
+        })
+    # 최신순 정렬(이름 기반 — dir 에 타임스탬프 포함)
+    maps.sort(key=lambda x: x["dir"], reverse=True)
+    return maps
+
+
+def download_robot_map(client: paramiko.SSHClient, map_dir: str, map_name: str) -> dict:
+    """로봇의 맵 디렉토리(map_dir)를 관제 로컬(static/maps)로 내려받고 PNG까지 생성한다.
+
+    매핑 종료(/end)와 가져오기(/maps/import)가 공유하는 다운로드 핵심 로직.
+    반환: DB 저장용 상대경로 dict {pgm, yaml, img, zip, dir_basename}.
+    """
+    import cv2
+
+    dir_basename = os.path.basename(map_dir.rstrip("/"))
+    remote_zip = f"{NOS_MAP_BASE_DIR}/{dir_basename}.zip"
+
+    # 1) zip 압축 (이미 있으면 zip -ry 가 갱신; 동기화용 산출물)
+    _q_dir = shlex.quote(dir_basename)
+    zip_cmd = f"cd {shlex.quote(NOS_MAP_BASE_DIR)} && sudo zip -ry {_q_dir}.zip {_q_dir}"
+    ssh_exec(client, zip_cmd, exec_timeout=120)
+    print(f"📦 zip 압축: {remote_zip}")
+
+    # 2) SFTP 다운로드 (pgm/yaml/zip)
+    sftp = client.open_sftp()
+    os.makedirs(LOCAL_MAPS_DIR, exist_ok=True)
+    local_pgm = os.path.join(LOCAL_MAPS_DIR, f"{map_name}.pgm")
+    local_yaml = os.path.join(LOCAL_MAPS_DIR, f"{map_name}.yaml")
+    local_zip = os.path.join(LOCAL_MAPS_DIR, f"{dir_basename}.zip")
+    try:
+        sftp.get(f"{map_dir}/{NOS_PGM_FILENAME}", local_pgm)
+        sftp.get(f"{map_dir}/{NOS_YAML_FILENAME}", local_yaml)
+        sftp.get(remote_zip, local_zip)
+    finally:
+        sftp.close()
+    print(f"📥 SFTP 다운로드 완료: {map_name} (pgm/yaml/zip)")
+
+    # 3) PGM → PNG 변환
+    local_png = os.path.join(LOCAL_MAPS_DIR, f"{map_name}.png")
+    img = cv2.imread(local_pgm, cv2.IMREAD_GRAYSCALE)
+    if img is not None:
+        cv2.imwrite(local_png, img)
+        print(f"🖼️ PGM → PNG 변환 완료: {local_png}")
+    else:
+        print("[WARN] PGM 읽기 실패, PNG 변환 건너뜀")
+
+    return {
+        "pgm": f"./static/maps/{map_name}.pgm",
+        "yaml": f"./static/maps/{map_name}.yaml",
+        "img": f"./static/maps/{map_name}.png",
+        "zip": f"./static/maps/{dir_basename}.zip",
+        "dir_basename": dir_basename,
+    }
+
+
+# ══════════════════════════════════════
+# 매핑 시작
+# ══════════════════════════════════════
+class MappingStartReq(BaseModel):
+    BusinessId: int
+    FloorId: int
+    MapName: str
+
+    @field_validator("MapName")
+    @classmethod
+    def _check_map_name(cls, v: str) -> str:
+        return validate_map_name(v)
+
+
+MAPPING_OWNER = "mapping"
+
+
+def _claim_mapping(hold: bool) -> None:
+    """매핑 세션 동안 로봇 소유권을 잡고 놓는다.
+
+    매핑은 IsWorking 이 아니라 mapping_state 로 관리되므로 주행 경로(_claim_nav)에
+    묻어가지 않는다. 두 관제가 동시에 매핑을 걸면 SLAM 상태가 엉키고 active 링크가
+    깨진다(nos-active-symlink-directory-bug).
+    """
+    try:
+        from app.robot_control import control_lock as cl
+        from app.user_cache import get_robot_id
+        rid = get_robot_id()
+        if rid is None:
+            return
+        if hold:
+            cl.acquire_system(rid, MAPPING_OWNER, label="매핑")
+        else:
+            cl.release_system(rid, MAPPING_OWNER)
+    except Exception as e:  # noqa: BLE001 - 소유권 처리 실패가 매핑을 막지 않는다
+        print(f"[MAPPING] 소유권 처리 실패(무시): {str(e)[:80]}")
+
+
+@mapping_ctrl.post("/start")
+def mapping_start(req: MappingStartReq, current_user: UserInfo = Depends(require_robot_available("map-edit"))):
+    if mapping_state["is_running"]:
+        raise HTTPException(status_code=409, detail="이미 매핑이 진행 중입니다.")
+
+    # 가드를 '시작 진입 즉시' 켠다. drmap 명령을 받는 순간 로봇 SLAM 이 원점으로 리셋되는데,
+    # is_running 을 SSH 성공 후에 켜면 '버튼 클릭~SSH 성공' 사이 원점 리셋이 위치 급변/재부팅으로
+    # 오인돼 '위치 재조정' 모달·경고가 샌다(_is_mapping 가드가 아직 꺼져 있어서).
+    # → 진입 시 켜고, 시작에 실패하면 except 에서 되돌린다.
+    mapping_state["is_running"] = True
+    _claim_mapping(True)
+    mapping_state["map_name"] = req.MapName
+    mapping_state["business_id"] = req.BusinessId
+    mapping_state["floor_id"] = req.FloorId
+
+    client = None
+    try:
+        # 1. drmap mapping 실행 (SSH 실패 시 재접속하여 재시도)
+        command = f"sudo drmap mapping -n {shlex.quote(req.MapName)}"
+        start_success = False
+        snapshotted = False
+        for attempt in range(3):
+            try:
+                client = get_ssh_client()
+                # drmap 이 active 를 새 맵으로 물기 전에, 이전 정상 맵을 스냅샷해 둔다.
+                # (종료 안 하고 취소/새로고침으로 중단되면 이 값으로 active 를 복원/초기화)
+                if not snapshotted:
+                    mapping_state["prev_active"] = read_active_target(client)
+                    snapshotted = True
+                    print(f"[MAP] 매핑 시작 전 active 스냅샷: {mapping_state['prev_active'] or '(없음)'}")
+                ssh_exec(client, command, check=True)
+                start_success = True
+                break
+            except Exception as e:
+                print(f"[SSH] mapping start 실패 ({attempt+1}/3): {e}")
+                if client:
+                    try: client.close()
+                    except: pass
+                    client = None
+                time.sleep(3)
+
+        if not start_success:
+            raise Exception("SSH 연결 불안정으로 매핑 시작 명령 실행 실패")
+
+        # drmap 매핑이 시작됐으면 실시간 시각화 릴레이(relay_map.py)도 자동 기동한다.
+        # (relay 가 떠야 브라우저 매핑 캔버스에 점군/odom 이 실시간으로 그려진다.)
+        # 세션 시작 — 좀비 relay 를 물려받지 않도록 강제로 새로 띄운다.
+        start_relay_map(force=True)
+
+        # is_running/map_name/business_id/floor_id 는 진입 시 이미 설정됨(가드 조기 활성화).
+        print(f"🗺️ 매핑 시작: {req.MapName}")
+        return {"status": "ok", "message": "매핑이 시작되었습니다."}
+
+    except Exception as e:
+        # 시작 실패 → 조기 활성화한 가드/상태를 롤백(매핑 미진행으로 복귀).
+        mapping_state["is_running"] = False
+        _claim_mapping(False)
+        mapping_state["map_name"] = None
+        mapping_state["business_id"] = None
+        mapping_state["floor_id"] = None
+        mapping_state["prev_active"] = None
+        print(f"[ERR] 매핑 시작 실패: {e}")
+        raise HTTPException(status_code=500, detail=f"매핑 시작 실패: {str(e)}")
+    finally:
+        if client:
+            try: client.close()
+            except: pass
+
+
+
+
+# ══════════════════════════════════════
+# 매핑 종료 → 파일 가져오기 → DB 저장
+# ══════════════════════════════════════
+class MappingEndReq(BaseModel):
+    BusinessId: int
+    FloorId: int
+    MapName: str
+
+    @field_validator("MapName")
+    @classmethod
+    def _check_map_name(cls, v: str) -> str:
+        return validate_map_name(v)
+
+
+@mapping_ctrl.post("/end")
+def mapping_end(req: MappingEndReq, db: Session = Depends(get_db), current_user: UserInfo = Depends(require_permission("map-edit"))):
+    # 시작하지 않은 매핑을 종료하면 맵 디렉토리를 60초간 헛기다린 뒤 실패한다.
+    # 진입 시점에 막고 원인을 알려준다.
+    if not mapping_state["is_running"]:
+        raise HTTPException(status_code=409, detail="진행 중인 매핑이 없습니다. 먼저 매핑을 시작해주세요.")
+
+    client = None
+
+    try:
+        # 1. 매핑 종료 명령 (SSH 실패 시 재접속하여 재시도)
+        stop_success = False
+        for attempt in range(3):
+            try:
+                client = get_ssh_client()
+                ssh_exec(client, "sudo drmap stop_mapping", check=True)
+                print("🛑 drmap stop_mapping 실행")
+                stop_success = True
+                break
+            except Exception as e:
+                print(f"[SSH] stop_mapping 실패 ({attempt+1}/3): {e}")
+                if client:
+                    try: client.close()
+                    except: pass
+                    client = None
+                time.sleep(3)
+
+        if not stop_success:
+            raise Exception("SSH 연결 불안정으로 매핑 종료 명령 실행 실패")
+
+        # 매핑이 끝났으니 실시간 시각화 릴레이(relay_map.py)도 정리한다.
+        stop_relay_map()
+
+        # 2. 맵 디렉토리 생성 대기 (최대 60초, SSH 끊기면 재접속)
+        map_dir = ""
+        find_cmd = f"sudo ls -dt {_map_dir_prefix(req.MapName)}*/ 2>/dev/null | head -1"
+
+        for wait in range(20):
+            time.sleep(3)
+            try:
+                map_dir = ssh_exec(client, find_cmd).rstrip("/")
+            except Exception:
+                print(f"[SSH] 연결 끊김, 재접속 시도...")
+                try: client.close()
+                except: pass
+                client = get_ssh_client()
+                map_dir = ssh_exec(client, find_cmd).rstrip("/")
+            if map_dir:
+                break
+            print(f"⏳ 맵 생성 대기 중... ({(wait+1)*3}초)")
+
+        if not map_dir:
+            raise Exception(f"맵 디렉토리를 찾을 수 없습니다: {NOS_MAP_BASE_DIR}/{req.MapName}-*")
+
+        print(f"📂 맵 디렉토리 발견: {map_dir}")
+
+        # 3~4. zip 압축 + SFTP 다운로드 + PGM→PNG (가져오기와 공용 헬퍼)
+        paths = download_robot_map(client, map_dir, req.MapName)
+
+        # 4.5 active 심볼릭 링크를 방금 완성된 맵으로 명확히 고정한다.
+        #   drmap stop_mapping 이 active 를 심볼릭으로 되돌려주지 않고 실제 작업 디렉토리
+        #   (blocks 만 남은 잔재)로 남겨, active 가 심볼릭이 아닌 일반 디렉토리로 깨지는
+        #   사례가 있다 → 여기서 robust 하게 재링크한다.
+        #   rm -rf(후행 슬래시 없음): active 가 심볼릭이면 링크만, 실제 디렉토리 잔재면 통째로
+        #   제거 → ln -s 로 교체. map_dir(=완성된 {MapName}-{ts})는 위에서 존재 확인됨.
+        try:
+            ssh_exec(
+                client,
+                f"sudo rm -rf {NOS_MAP_BASE_DIR}/active && "
+                f"sudo ln -sfn {shlex.quote(map_dir)} {NOS_MAP_BASE_DIR}/active",
+            )
+            is_link = ssh_exec(
+                client, f"test -L {NOS_MAP_BASE_DIR}/active && echo OK || echo NO"
+            ).strip().endswith("OK")
+            if is_link:
+                ssh_exec(client, "sudo systemctl restart localization")
+                print(f"🗺️ active 재링크: → {map_dir} (localization 재시작)")
+            else:
+                # 재링크 직후에도 심볼릭이 아니면(경쟁 프로세스가 다시 디렉토리로 생성 등)
+                # 자동 충전/측위가 엉뚱한 맵을 잡지 않도록 명확히 경고만 남긴다(저장은 정상).
+                print(f"[WARN] active 재링크 후에도 심볼릭이 아님 — 수동 확인 필요: {NOS_MAP_BASE_DIR}/active")
+        except Exception as e:
+            print(f"[WARN] active 재링크 실패(매핑 저장은 정상 처리됨): {e}")
+
+        # 5. SSH 연결 종료
+        client.close()
+        client = None
+
+        # 7. DB에 맵 정보 저장
+        robot_map = RobotMapInfo(
+            BusinessId=req.BusinessId,
+            FloorId=req.FloorId,
+            MapName=req.MapName,
+            PgmFilePath=paths["pgm"],
+            YamlFilePath=paths["yaml"],
+            ImgFilePath=paths["img"],
+            ZipFilePath=paths["zip"],
+        )
+        db.add(robot_map)
+        db.commit()
+        db.refresh(robot_map)
+
+        # 7.5 맵 실물 파일을 공유 DB 로 업로드 (다른 관제 PC 가 파일 없이도 사용 가능)
+        try:
+            from app.map.map_file_store import store_map_files
+            store_map_files(db, robot_map)
+        except Exception as e:
+            print(f"[MAPFILE] 매핑 완료 후 DB 업로드 실패(맵 저장은 정상): {e}")
+
+        # 8. 상태 초기화 (active 는 위 4.5 에서 완성된 새 맵으로 명시적으로 재링크함)
+        mapping_state["is_running"] = False
+        _claim_mapping(False)
+        mapping_state["map_name"] = None
+        mapping_state["business_id"] = None
+        mapping_state["floor_id"] = None
+        mapping_state["prev_active"] = None
+
+        print(f"✅ 매핑 완료 & 저장: {req.MapName}")
+        return {
+            "status": "ok",
+            "message": "매핑이 완료되고 저장되었습니다.",
+            "map_id": robot_map.id,
+        }
+
+    except Exception as e:
+        # is_running 을 지우지 않는다 — 지우면 재시도(/end)가 409 로 막히고,
+        # 취소(/cancel)도 스킵돼 로봇 active 가 미완결 맵에 고착된다.
+        # 매핑은 여전히 "진행 중"으로 두고 사용자가 재시도 또는 취소를 선택하게 한다.
+        print(f"[ERR] 매핑 종료 실패: {e}")
+        raise HTTPException(status_code=500, detail=f"매핑 종료 실패: {str(e)}")
+    finally:
+        if client:
+            try: client.close()
+            except: pass
+
+
+# ══════════════════════════════════════
+# 매핑 취소 (저장 없이 종료)
+# ══════════════════════════════════════
+@mapping_ctrl.post("/cancel")
+def mapping_cancel(current_user: UserInfo = Depends(require_permission("map-edit"))):
+    """매핑 취소(저장 없이 종료).
+
+    종료(/end) 없이 중단된 경우 active 가 미완결 맵에 고착되므로,
+    시작 시 스냅샷한 이전 정상 맵으로 active 를 복원(없으면 초기화)하고 localization 을 재시작한다.
+    """
+    # 매핑을 시작하지 않았으면 로봇을 건드리지 않는다.
+    # (가드가 없으면 prev_active=None 으로 restore_active("") 가 돌아 정상 active 링크까지
+    #  제거해 버려, 매핑을 시작조차 안 했는데 로봇 측위가 깨진다.)
+    if not mapping_state["is_running"]:
+        print("[MAP] 매핑 취소 요청 — 진행 중인 매핑 없음(무시)")
+        return {"status": "ok", "message": "진행 중인 매핑이 없습니다.", "skipped": True}
+
+    map_name = mapping_state.get("map_name")
+    prev_active = mapping_state.get("prev_active")
+    client = None
+
+    cleanup_ok = True
+    cleanup_error = ""
+
+    try:
+        client = get_ssh_client()
+        ssh_exec(client, "sudo drmap stop_mapping", check=True)
+
+        # 실시간 시각화 릴레이(relay_map.py)도 정리한다.
+        stop_relay_map()
+
+        if map_name:
+            time.sleep(2)
+            ssh_exec(client, f"sudo rm -rf {_map_dir_prefix(map_name)}*/")
+            print(f"🗑️ 맵 디렉토리 삭제: {map_name}-*/")
+
+        # active 복원/초기화: 미완결 맵(또는 방금 삭제된 디렉토리)을 가리키지 않도록
+        # 이전 정상 맵으로 되돌린다. prev_active 가 없으면 active 링크 자체를 제거한다.
+        restore_active(client, prev_active or "")
+    except Exception as e:
+        # 로봇에 닿지 못해도 서버 상태는 반드시 푼다(안 그러면 새 매핑이 409 로 영구 차단).
+        # 대신 정리 실패를 호출자에게 알려 운영자가 로봇 상태를 확인하도록 한다.
+        cleanup_ok = False
+        cleanup_error = str(e)
+        print(f"[ERR] 매핑 취소 중 오류: {e}")
+    finally:
+        if client:
+            try: client.close()
+            except: pass
+        mapping_state["is_running"] = False
+        _claim_mapping(False)
+        mapping_state["map_name"] = None
+        mapping_state["business_id"] = None
+        mapping_state["floor_id"] = None
+        mapping_state["prev_active"] = None
+
+    if not cleanup_ok:
+        print("🚫 매핑 취소(로봇 정리 실패)")
+        return {
+            "status": "warning",
+            "message": (
+                "매핑을 취소했지만 로봇 정리에 실패했습니다. "
+                "로봇 연결 상태와 현재 맵을 확인해주세요."
+            ),
+            "detail": cleanup_error,
+        }
+
+    print("🚫 매핑 취소됨")
+    return {"status": "ok", "message": "매핑이 취소되었습니다."}
+
+
+# ══════════════════════════════════════
+# 매핑 상태 조회
+# ══════════════════════════════════════
+@mapping_ctrl.get("/status")
+def mapping_status(current_user: UserInfo = Depends(require_permission("map-edit"))):
+    return {
+        "is_running": mapping_state["is_running"],
+        "map_name": mapping_state["map_name"],
+    }

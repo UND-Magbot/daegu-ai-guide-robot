@@ -1,0 +1,110 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Environment variables
+.env
+Backend/.env
+# .env 백업(.env.bak_날짜 등)도 비밀값을 그대로 담는다. 예시 파일만 추적한다.
+.env.*
+!.env.example
+
+# Virtual environment
+noah/
+venv/
+.venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Node
+node_modules/
+
+# Build output
+Backend/out/
+Frontend/out/
+Frontend/.next/
+
+# 백엔드 콘솔 로그 (런타임 생성)
+backend_logs/
+
+# MD
+memo.md
+req.md
+MIGRATION.md
+
+# Junk files (accidentally created)
+Backend/1
+Backend/Math.min(Math.max(v
+Backend/clampTranslate(prev.x
+Backend/r.id
+Backend/rect.top
+Backend/void
+Backend/{
+
+
+# Auto-downloaded binaries
+Backend/ffmpeg_bin/
+Backend/recordings/
+
+# Test scripts
+Backend/test_recording.py
+
+# Claude Code 로컬 설정은 제외, 프로젝트 skill 은 추적
+.claude/*
+!.claude/skills/
+# 매뉴얼 저장소 경로(개인 PC 절대 경로)는 공유하지 않는다
+.claude/skills/tech-manual-manager/config.local.json
+# 동기화·마이그레이션 백업 (대용량 · 로컬 전용)
+backup_before_*/
+*.sql
+*.sql.gz
+*.dump
+
+# 빌드 산출물
+.next/
+Frontend/tsconfig.tsbuildinfo
+
+# 로컬 오버라이드
+docker-compose.override.yml
+
+# 로컬 도구 상태·백업 (토큰 등 민감 정보가 로그에 남는다)
+.bkit/
+backup_before_*/
+frontend_bak/
+*.bak
+*.bak_*
+_backup/
+
+# 음성 장비 시험 녹음·Jetson 에서 받아 온 비교용 사본
+robot_voice/_*.raw
+robot_voice/_*.wav
+robot_voice/*.jetson
+
+# 일회성 점검 스크립트 (장비 SSH 비밀번호 포함) — 커밋 금지
+Backend/data/_*.py
+
+# 사전 시뮬 하네스(가상환경·결과·변경안 사본)
+sim/.venv/
+sim/out/
+# 전방 카메라 사람 인식 기록(10-29)
+vision_rec/
+# 열화상 카메라 계정(예시: robot_vision/thermal_env.sample)
+robot_vision/thermal.env
+
+docs/.bkit/
+docs/report/
+docs/기타/
+door_rec/
+_자료/

@@ -1,0 +1,12 @@
+# reSpeaker XVF3800(Seeed 2886:001a)이 USB 에 올라오면 운영 파라미터를 다시 넣는다.
+#
+# 보드는 설정을 플래시에 저장하지 않으면 재열거마다 공장값으로 돌아간다. 그리고 ALSA
+# 카드 인덱스가 밀려(2026-09-29: card 1 → card 4) PortAudio 목록을 시작 시점에 굳히는
+# robot-voice 는 재기동해야 새 장치를 잡는다. 둘 다 respeaker-tune.service 가 처리한다.
+#
+# DFU 모드(2886:0018)에는 걸지 않는다 — 펌웨어 기입 중에 제어 명령을 넣으면 안 된다.
+#
+# 설치: sudo bash install-respeaker-tune.sh
+ACTION=="add", SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", \
+  ATTR{idVendor}=="2886", ATTR{idProduct}=="001a", \
+  TAG+="systemd", ENV{SYSTEMD_WANTS}+="respeaker-tune.service"

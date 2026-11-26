@@ -1,0 +1,36 @@
+# 음성 안내 루프. Jetson 에서 상시 동작한다.
+#
+# API 키는 유닛에 직접 쓰지 않는다 — systemctl cat 으로 노출되기 때문에
+# 권한 600 인 /etc/robot-voice.env 에서 읽는다.
+[Unit]
+Description=Robot voice guide (STT/TTS scenario loop)
+After=network-online.target sound.target
+Wants=network-online.target
+# 반복 크래시로 systemd 가 재시작을 포기하지 않도록 한다([Unit] 섹션 키다).
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+# 오디오 장치 접근 때문에 실제 로그인 사용자로 돌린다(ALSA/PulseAudio 세션).
+User=%i
+SupplementaryGroups=audio
+
+# 번들 캐시(관제가 끊겨도 마지막 시나리오로 동작) — /var/lib/robot-voice 를 User 소유로 만든다.
+# 경로는 $STATE_DIRECTORY 로 넘어오고 config.BUNDLE_CACHE 가 그걸 쓴다.
+StateDirectory=robot-voice
+
+EnvironmentFile=/etc/robot-voice.env
+Environment=PYTHONUNBUFFERED=1
+
+WorkingDirectory=/opt/robot/voice
+ExecStart=/opt/robot/voice/venv/bin/python -m robot_voice.main
+
+Restart=always
+RestartSec=5
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=robot-voice
+
+[Install]
+WantedBy=multi-user.target

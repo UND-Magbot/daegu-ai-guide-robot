@@ -1,0 +1,669 @@
+"""로봇 상태/위치/네비게이션 조회 + 초기 pose 설정"""
+
+import json
+import socket
+import time
+
+from fastapi import APIRouter, Depends, Request, Response, Body, HTTPException
+from pydantic import BaseModel, Field
+from sqlalchemy import text
+from sqlalchemy.orm import Session
+
+import app.robot_io.runtime as runtime
+from app.auth.audit import get_client_ip, write_audit
+from app.auth.dependencies import (
+    get_current_user, require_admin, require_any_permission, require_user_or_agent,
+)
+from app.database.database import SessionLocal, get_db
+from app.database.models import MapInitPose, UserInfo
+from app.robot_io.config import (
+    RECEIVER_IP,
+    RECEIVER_PORT,
+    RECEIVER_TCP_PORT,
+    ROBOT_IP,
+    ROBOT_PORT,
+)
+
+router = APIRouter()
+# 로그인 기본 잠금 밖. Jetson(robot_voice)이 X-Agent-Token 으로 읽는 경로만 둔다.
+agent_router = APIRouter()
+
+# 위치 주입·확정: 로봇을 다루는 사람(robot-list) 또는 맵을 다루는 사람(map-edit, place-list)
+_LOCALIZE = [Depends(require_any_permission("robot-list", "map-edit", "place-list"))]
+_ADMIN = [Depends(require_admin)]
+
+
+class InitPoseBody(BaseModel):
+    """위치 재조정 본문.
+
+    - target="charge": 운영자가 '로봇이 충전소에 있음'을 알림 → 현재 맵/층 충전소 도킹 좌표(접지 진실)로 주입.
+      (로봇이 충전소 인근에 있으나 측위가 틀어져 보고값을 신뢰할 수 없을 때 사용.)
+    - {x, y}: 운영자 지정 좌표(yaw 미지정 시 last_status.PosYaw).
+    - 본문 없음: 상황별(충전→dock_anchor / 비충전→현재 보고 위치).
+    """
+    x: float | None = None
+    y: float | None = None
+    yaw: float | None = None
+    robot_id: int | None = None
+    target: str | None = None  # "charge" 등
+
+
+def _runtime_entry(robot_id: int | None) -> dict:
+    if robot_id is None:
+        return {}
+    with runtime._lock:
+        return dict(runtime._runtime.get(robot_id) or {})
+
+
+def _select_robot_id(requested_robot_id: int | None = None) -> int | None:
+    """요청 robot_id가 있으면 우선 사용하고, 없으면 기존 단일 로봇 환경(ROBOT_IP) 기준."""
+    if requested_robot_id is not None:
+        if not _runtime_entry(requested_robot_id):
+            raise HTTPException(status_code=404, detail="선택한 로봇을 찾을 수 없습니다.")
+        return requested_robot_id
+    return runtime.get_robot_id_by_ip(ROBOT_IP)
+
+
+def _last_status_yaw(rid: int) -> float:
+    """robot_last_status 의 마지막 heading. 없으면 0.0."""
+    from app.database.models import RobotLastStatus
+    db = SessionLocal()
+    try:
+        r = db.query(RobotLastStatus).filter(RobotLastStatus.RobotId == rid).first()
+        return float(r.PosYaw) if r and r.PosYaw is not None else 0.0
+    finally:
+        db.close()
+
+
+def _get_init_pose_from_db(robot_id: int | None = None) -> dict | None:
+    """현재 로봇 맵에 등록된 초기 좌표(map_init_pose). 없으면 None.
+
+    예전에는 config.INIT_POSE 로 폴백했지만, 그 값은 특정 맵(MapId 22) 좌표라
+    다른 맵에서는 엉뚱한 위치가 된다. 등록이 없으면 '없음'으로 돌려 호출부가 막게 한다.
+    """
+    rid = _select_robot_id(robot_id)
+    if rid is None:
+        return None
+
+    map_id = _runtime_entry(rid).get("current_map_id")
+    if not map_id:
+        return None
+
+    db = SessionLocal()
+    try:
+        pose = db.query(MapInitPose).filter(
+            MapInitPose.RobotId == rid,
+            MapInitPose.MapId == map_id,
+        ).first()
+        if pose:
+            return {"PosX": pose.PosX, "PosY": pose.PosY, "PosZ": 0.0, "Yaw": pose.Yaw}
+        return None
+    finally:
+        db.close()
+
+
+@router.get("/robot/position")
+def get_pos(robot_id: int | None = None):
+    rid = _select_robot_id(robot_id)
+    if rid is None:
+        return {"x": 0.0, "y": 0.0, "yaw": 0.0, "timestamp": 0}
+    return runtime.get_position(rid)
+
+
+@router.get("/robot/initpose")
+def get_init_pose(robot_id: int | None = None):
+    """현재 맵의 초기 위치. 미등록이면 null."""
+    pose = _get_init_pose_from_db(robot_id)
+    if pose is None:
+        return None
+    return {"x": pose["PosX"], "y": pose["PosY"], "yaw": pose["Yaw"]}
+
+
+# 저장할 위치는 방금 확정한 '현재 보고 위치'다. 오래된 좌표를 저장하지 않도록 신선도를 본다.
+_MAP_DEFAULT_POS_FRESH_SEC = 5.0
+
+
+@router.put("/robot/initpose/map-default", dependencies=_LOCALIZE)
+def save_map_default_init_pose(
+    request: Request,
+    robot_id: int | None = None,
+    db: Session = Depends(get_db),
+    current_user: UserInfo = Depends(get_current_user),
+):
+    """로봇의 현재 위치를 '현재 맵의 초기 위치'(map_init_pose)로 저장한다.
+
+    위치 재조정에서 스캔 정렬을 확인·확정한 직후에 쓴다. 저장된 값은 맵 활성화/동기화와
+    자동 위치 초기화(비충전 폴백)가 시드로 사용한다.
+    """
+    rid = _select_robot_id(robot_id)
+    if rid is None:
+        raise HTTPException(status_code=404, detail="로봇을 찾을 수 없습니다.")
+    map_id = _runtime_entry(rid).get("current_map_id")
+    if not map_id:
+        raise HTTPException(status_code=409, detail="로봇의 현재 맵을 알 수 없어 저장할 수 없습니다.")
+    if runtime.is_initpose_pending(rid):
+        raise HTTPException(status_code=409, detail="위치가 아직 확정되지 않았습니다. 위치를 먼저 확정하세요.")
+
+    pos = runtime.get_position(rid) or {}
+    ts = pos.get("timestamp", 0) or 0
+    if not ts or time.time() - ts > _MAP_DEFAULT_POS_FRESH_SEC:
+        raise HTTPException(status_code=409, detail="로봇 현재 위치를 받지 못했습니다. 통신 상태를 확인하세요.")
+    # 관제의 '확정' 플래그만으로는 부족하다 — 로봇 측위가 상실돼도 좌표는 마지막 값으로 계속
+    # 들어온다(2026-09-29: 45분간 상실인데 확정 상태로 보였다). 로봇이 '정상(0)'이라고 보고할
+    # 때만 저장한다. 모름(구버전 receiver)도 거부 — 실제로 그 틈에 상실 좌표가 저장됐다.
+    location = runtime.get_localization_state(rid)
+    if location != 0:
+        reason = "측위 상태를 받지 못함" if location is None else f"측위 상실(상태 {location})"
+        raise HTTPException(
+            status_code=409,
+            detail=f"로봇 위치를 믿을 수 없어 저장하지 않았습니다({reason}). 위치 재조정으로 먼저 위치를 맞추세요.",
+        )
+    x, y, yaw = float(pos["x"]), float(pos["y"]), float(pos.get("yaw", 0.0))
+
+    row = db.query(MapInitPose).filter(
+        MapInitPose.RobotId == rid,
+        MapInitPose.MapId == map_id,
+    ).first()
+    before = f"({row.PosX:.3f}, {row.PosY:.3f}, {row.Yaw:.3f})" if row else "없음"
+    if row:
+        row.PosX, row.PosY, row.Yaw = x, y, yaw
+    else:
+        db.add(MapInitPose(MapId=map_id, RobotId=rid, PosX=x, PosY=y, Yaw=yaw))
+    db.commit()
+
+    write_audit(db, current_user.id, "map_init_pose_saved", "map", map_id,
+                detail=f"로봇 {rid} 맵 초기 위치 저장: {before} → ({x:.3f}, {y:.3f}, {yaw:.3f})",
+                ip_address=get_client_ip(request))
+    print(f"[INIT_POSE] 맵 {map_id} 초기 위치 저장(robot {rid}): {before} → ({x:.3f}, {y:.3f}, {yaw:.3f})")
+    return {"status": "ok", "map_id": map_id, "x": x, "y": y, "yaw": yaw,
+            "msg": "현재 위치를 이 지도의 초기 위치로 저장했습니다."}
+
+
+@router.get("/robot/initpose/compare")
+def initpose_compare(robot_id: int | None = None):
+    """위치 재조정 판단 보조 — 마지막 확정 위치(robot_last_status) vs 현재 보고 위치(live) 비교.
+
+    비충전 시 운영자가 '현재 보고 위치'를 신뢰해 확정할지 정확히 판단하도록 두 좌표와 차이(delta_m)를 제공한다.
+    (차이가 작으면 보고값이 마지막 확정과 일관 → 신뢰도↑ / 크면 이동·오측위 가능 → 주의.)
+    충전 중이면 charging=true 로, 운영자는 '충전소 위치로 지정'을 우선 사용한다.
+    """
+    import math
+
+    rid = _select_robot_id(robot_id)
+    if rid is None:
+        return {"robot_id": None, "charging": False, "last_status": None, "live": None, "delta_m": None}
+
+    live = runtime.get_position(rid) or {}
+    live_ts = live.get("timestamp", 0) or 0
+    charging = bool(runtime.is_charging(rid))
+
+    last_status = None
+    db = SessionLocal()
+    try:
+        from app.database.models import RobotLastStatus
+        row = db.query(RobotLastStatus).filter(RobotLastStatus.RobotId == rid).first()
+        if row and row.PosX is not None and row.PosY is not None:
+            last_status = {"x": row.PosX, "y": row.PosY, "yaw": row.PosYaw,
+                           "floor": row.CurrentFloorId}
+    finally:
+        db.close()
+
+    delta = None
+    if last_status and live_ts:
+        delta = round(math.hypot(live["x"] - last_status["x"], live["y"] - last_status["y"]), 2)
+
+    return {
+        "robot_id": rid,
+        "charging": charging,
+        "last_status": last_status,
+        "live": ({"x": live.get("x"), "y": live.get("y"), "yaw": live.get("yaw"),
+                  "timestamp": live_ts} if live_ts else None),
+        "delta_m": delta,
+    }
+
+
+@router.post("/robot/initpose", dependencies=_LOCALIZE)
+def init_pose(body: InitPoseBody | None = Body(default=None)):
+    """초기 위치 주입.
+
+    - 본문에 {x, y(, yaw)} 가 오면 = 운영자 맵 지정 위치(위치 재조정 도구의 rviz식 pose estimate).
+      yaw 미지정 시 last_status.PosYaw 사용.
+    - target="charge" = 충전소 도킹 좌표(접지 진실)로 주입.
+    수렴 성공 시 미초기화(자율주행 보류) 플래그를 해제한다.
+    """
+    # ── 허용 경로: (1) target=charge  (2) 운영자 지정 좌표 {x,y} ──
+    # '위치 재조정(스캔 정합)' 도구가 맵에서 찍은 pose 를 {x,y,yaw} 로 보낸다. 로봇이 이 시드로
+    # scan-match 수렴 → verify_and_clear 로 검증 후 미확정 해제(잘못 찍으면 수렴 실패로 거부).
+    # 본문 없음/좌표 없음(모호) 은 오확정 방지를 위해 막는다.
+    has_xy = body is not None and body.x is not None and body.y is not None
+    is_charge = body is not None and body.target == "charge"
+    if not (is_charge or has_xy):
+        return {
+            "status": "disabled",
+            "converged": False,
+            "msg": "맵에서 로봇 위치를 지정하거나 '충전소 위치로 지정'을 사용하세요.",
+        }
+
+    rid = _select_robot_id(body.robot_id if body is not None else None)
+    target_entry = _runtime_entry(rid)
+    target_robot_ip = target_entry.get("robot_ip") or ROBOT_IP
+    target_robot_port = int(target_entry.get("robot_port") or ROBOT_PORT)
+
+    if body is not None and body.target == "charge":
+        # 운영자가 '로봇이 충전소에 있음'을 알림 → 현재 맵/층 충전소 도킹 좌표(접지 진실)로 주입.
+        # 로봇이 충전소 인근에 있으나 측위가 틀어져(보고값 신뢰 불가) 자가/현재값으로는 못 고칠 때 사용.
+        from app.robot_control.auto_init_pose import _resolve_dock_pose
+        cur_floor = (target_entry or {}).get("current_floor_id")
+        cur_map = (target_entry or {}).get("current_map_id")
+        db = SessionLocal()
+        try:
+            pose = _resolve_dock_pose(db, cur_floor, cur_map)
+        finally:
+            db.close()
+        if not pose:
+            return {"status": "error", "converged": False,
+                    "msg": "현재 맵/층에 등록된 충전소가 없습니다. 충전소를 먼저 등록하세요."}
+        print(f"[INIT_POSE] '충전소 위치로 지정' → 도킹 좌표 주입: {pose}")
+    elif body is not None and body.x is not None and body.y is not None:
+        # (선택) 운영자가 맵 좌표를 직접 지정한 경우. yaw 미지정 시 last_status.PosYaw.
+        yaw = body.yaw if body.yaw is not None else (_last_status_yaw(rid) if rid else 0.0)
+        pose = {"PosX": float(body.x), "PosY": float(body.y), "PosZ": 0.0, "Yaw": float(yaw)}
+        print(f"[INIT_POSE] 운영자 지정 좌표 주입: {pose}")
+    elif rid is not None:
+        # 본문 없음('위치 재조정' 버튼) — 상황별:
+        #   충전 중 → 충전소(dock_anchor) 접지 진실.
+        #   비충전 → 로봇이 지금 보고하는 '현재 실시간 position' 으로 확정(운영자가 표시 위치 확인 후 클릭).
+        if runtime.is_charging(rid):
+            from app.robot_control.auto_init_pose import resolve_init_pose
+            pose, _src = resolve_init_pose(rid)
+            print(f"[INIT_POSE] '위치 재조정'(충전) source={_src}: {pose}")
+        else:
+            cur = runtime.get_position(rid) or {}
+            if cur.get("timestamp", 0):
+                pose = {"PosX": float(cur.get("x", 0.0)), "PosY": float(cur.get("y", 0.0)),
+                        "PosZ": 0.0, "Yaw": float(cur.get("yaw", 0.0))}
+                print(f"[INIT_POSE] '위치 재조정'(비충전) 현재 실시간 위치로 확정: {pose}")
+            else:
+                # 라이브 위치 없음(수신 전) → 폴백
+                from app.robot_control.auto_init_pose import resolve_init_pose
+                pose, _src = resolve_init_pose(rid)
+                print(f"[INIT_POSE] '위치 재조정'(비충전, 라이브 없음) source={_src}: {pose}")
+    else:
+        pose = _get_init_pose_from_db()
+
+    if pose is None:
+        return {"status": "error", "converged": False,
+                "msg": "이 지도의 초기 위치가 등록되지 않았습니다. 맵에서 로봇 위치를 직접 지정하세요."}
+
+    before = runtime.get_position(rid) if rid else {}
+
+    # receiver.py에 INIT_POSE 전송 (items로 좌표 전달)
+    import json, socket
+    from app.robot_io.config import RECEIVER_IP, RECEIVER_PORT
+    msg = {
+        "action": "INIT_POSE",
+        "items": pose,
+        "robot_ip": target_robot_ip,
+        "robot_port": target_robot_port,
+    }
+    ack = None
+    try:
+        from app.robot_io.sender import request_receiver_tcp
+        ack = request_receiver_tcp(msg, connect_timeout=2.0, recv_timeout=6.0)
+        print(f"[INIT_POSE] receiver TCP 응답: {ack}")
+    except Exception as tcp_error:
+        print(f"[INIT_POSE] receiver TCP 실패, UDP fallback: {tcp_error}")
+
+    # 구버전 receiver 또는 TCP 방화벽 환경을 위한 기존 UDP 보조 경로.
+    if not isinstance(ack, dict) or ack.get("status") != "ok":
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.settimeout(5.0)
+        try:
+            sock.sendto(json.dumps(msg).encode("utf-8"), (RECEIVER_IP, RECEIVER_PORT))
+            try:
+                ack_data, _ = sock.recvfrom(4096)
+                ack = json.loads(ack_data.decode("utf-8"))
+                print(f"[INIT_POSE] receiver UDP fallback 응답: {ack}")
+            except socket.timeout:
+                print("[INIT_POSE] receiver UDP fallback 타임아웃")
+        finally:
+            sock.close()
+
+    # 수렴 검증 후, 성공 시 미초기화(자율주행 보류) 플래그 해제 + 복구 로그.
+    # receiver의 status:ok는 응답 수신 성공일 뿐, 위치 초기화 성공을 의미하지 않는다.
+    converged, reason = False, "미수락"
+    if rid is not None and (ack or {}).get("status") == "ok":
+        runtime.note_initpose_injected(rid)
+        from app.robot_control.auto_init_pose import verify_and_clear
+        converged, reason = verify_and_clear(rid, pose)
+    else:
+        import time
+        time.sleep(2)
+
+    after = runtime.get_position(rid) if rid else {}
+    ack_response = (ack or {}).get("response") or {}
+    ack_items = ack_response.get("PatrolDevice", {}).get("Items") or {}
+    error_code = ack_items.get("ErrorCode")
+    return {
+        # HTTP/transport 요청 자체는 처리됐지만, 실제 위치 확정 여부는 converged로 판단한다.
+        "status": "ok" if (ack or {}).get("status") == "ok" else "error",
+        "transport_ok": (ack or {}).get("status") == "ok",
+        "error_code": error_code,
+        "converged": converged,
+        "before": before,
+        "after": after,
+        "msg": f"초기 위치 설정 완료: {pose}" if converged
+               else f"초기 위치 명령 전송됨(수렴 미확인: {reason}): {pose}",
+    }
+
+
+# 엘리베이터 입구 장소 이름 단서 — 엘리베이터 층 설정(로비 장소)이 없을 때 이름으로 찾는다.
+_ELEVATOR_NAME_KEYS = ("엘리베이터", "EV")
+# 엘리베이터 장소가 없는 층(2층·3층)의 도착 시드 — 공백·밑줄 무시, 층 접두어 허용(2F_로봇_대기장소)
+_STANDBY_PLACE_NAME = "로봇대기장소"
+
+
+def _elevator_lobby_pose(db: Session, map_id: int) -> tuple[dict, str] | None:
+    """층 이동 도착 시드 좌표.
+
+    1) 엘리베이터 층 설정의 로비 장소 2) 이름에 '엘리베이터'/'EV' 가 든 장소 3) '로봇 대기 장소'.
+    1층(맵 42)은 엘리베이터 입구로, 3층(맵 43)·2층(맵 46)은 엘리베이터 장소가 없어 로봇 대기 장소로
+    잡힌다 — 내린 뒤 로봇을 대기 장소에 세우고 위치를 맞춘다(3층 2026-10-12, 2층 10-13 운영 방식).
+    """
+    from app.database.models import ElevatorFloorStop, LocationInfo
+
+    loc = None
+    stop = db.query(ElevatorFloorStop).filter(
+        ElevatorFloorStop.MapId == map_id,
+        ElevatorFloorStop.LobbyLocationId.isnot(None),
+    ).first()
+    if stop:
+        loc = db.query(LocationInfo).filter(
+            LocationInfo.id == stop.LobbyLocationId, LocationInfo.MapId == map_id
+        ).first()
+    if loc is None:
+        rows = db.query(LocationInfo).filter(
+            LocationInfo.MapId == map_id
+        ).order_by(LocationInfo.id).all()
+        named = [r for r in rows
+                 if any(k.lower() in (r.LacationName or "").lower() for k in _ELEVATOR_NAME_KEYS)]
+        # '엘리베이터 내부' 같은 장소보다 문 앞(입구)을 고른다
+        named.sort(key=lambda r: "입구" not in (r.LacationName or ""))
+        if not named:
+            named = [r for r in rows
+                     if _STANDBY_PLACE_NAME in (r.LacationName or "").replace(" ", "").replace("_", "")]
+        loc = named[0] if named else None
+    if loc is None or loc.LocationX is None or loc.LocationY is None:
+        return None
+    pose = {"PosX": float(loc.LocationX), "PosY": float(loc.LocationY), "PosZ": 0.0,
+            "Yaw": float(loc.Yaw or 0.0)}
+    return pose, loc.LacationName or ""
+
+
+class LobbySeedBody(BaseModel):
+    """층 도착 시드 — 화면이 받은 스캔(로봇 기준 x·y). 있으면 방향을 스캔으로 정한다."""
+    points: list[list[float]] | None = Field(default=None, max_length=4000)
+
+
+def _scan_seed(db: Session, map_id: int, pose: dict, points: list | None) -> tuple[dict, dict | None]:
+    """저장 시드 좌표 둘레에서 스캔으로 위치·방향을 정한다(11-05). 못 정하면 저장값 그대로 + 사유.
+
+    10-30 1층 도착: 저장 방향(−69°)과 실제가 약 160° 달라 시드가 안 잡히거나 엉뚱한 곳(21m)으로 갔다.
+    """
+    if not points:
+        return pose, None
+    from app.navigation.via_route import _load_grid
+    from app.robot_control import scan_match
+    grid = _load_grid(db, int(map_id))
+    if grid is None:
+        return pose, {"ok": False, "reason": "지도 파일을 읽지 못함"}
+    res = scan_match.seed_from_scan(scan_match.field_for_grid(int(map_id), grid),
+                                    points, pose["PosX"], pose["PosY"])
+    if not res["ok"]:
+        return pose, res
+    fit = res["fit"]
+    return {"PosX": fit["x"], "PosY": fit["y"], "PosZ": 0.0, "Yaw": fit["yaw"]}, res
+
+
+@router.post("/robot/initpose/elevator-lobby", dependencies=_LOCALIZE)
+def init_pose_elevator_lobby(robot_id: int | None = None, body: LobbySeedBody | None = Body(default=None),
+                             db: Session = Depends(get_db)):
+    """층 이동(사전 맵 전환) 뒤 도착층 위치 재조정의 첫 시드 — 엘리베이터 입구 좌표를 주입한다.
+
+    미리 전환할 때는 로봇이 아직 출발층이라 시드를 넣지 않는다(maps.activate_map). 도착해서
+    재조정 창을 열면 로봇은 엘리베이터 문 앞에 있으므로 그 좌표로 측위를 시작시킨다.
+    층 이동 중 미확정일 때만 넣는다 — 이미 위치를 잡은 로봇에 주입하면 측위가 흔들릴 수 있다.
+    화면이 스캔을 실어 보내면 방향(과 ±0.5m 위치)은 저장값 대신 스캔으로 정한다 — 로봇이 엘리베이터에서
+    어느 쪽을 보고 나오든 맞게. 점수가 낮거나 모호하면 저장값으로 넣고 seed.scan 에 사유를 싣는다.
+    """
+    rid = _select_robot_id(robot_id)
+    if rid is None:
+        return {"status": "skipped", "msg": "로봇을 찾을 수 없습니다."}
+    if not (runtime.is_initpose_pending(rid)
+            and runtime.get_initpose_reason(rid) == runtime.FLOOR_TRANSIT_REASON):
+        return {"status": "skipped", "msg": "층 이동 중이 아니어서 엘리베이터 입구 시드를 넣지 않았습니다."}
+    map_id = _runtime_entry(rid).get("current_map_id")
+    found = _elevator_lobby_pose(db, map_id) if map_id else None
+    if found is None:
+        return {"status": "none", "msg": "이 지도에 도착 기준 위치가 설정되어 있지 않습니다. 로봇 위치를 직접 지정하세요."}
+    stored, name = found
+    pose, scan = _scan_seed(db, map_id, stored, body.points if body else None)
+    how = ("스캔으로 방향 결정 " + f"{scan['fit']['score']:.0f}%" if scan and scan["ok"]
+           else f"저장 방향({scan['reason']})" if scan else "저장 방향(스캔 없음)")
+    print(f"[INIT_POSE] 층 이동 도착 — '{name}' 시드 주입(robot {rid}, map {map_id}, {how}): {pose}")
+    res = init_pose(InitPoseBody(x=pose["PosX"], y=pose["PosY"], yaw=pose["Yaw"], robot_id=rid))
+    seed = {"name": name, "x": pose["PosX"], "y": pose["PosY"], "yaw": pose["Yaw"],
+            "stored": {"x": stored["PosX"], "y": stored["PosY"], "yaw": stored["Yaw"]},
+            "scan": scan}
+    return {**res, "seed": seed}
+
+
+@router.post("/robot/initpose/confirm-current", dependencies=_LOCALIZE)
+def confirm_current_position(robot_id: int | None = None):
+    """운영자 '현재 위치로 확정' — 로봇이 지금 보고하는 위치로 미확정을 해제한다.
+
+    rviz 등 외부 도구로 위치 교정을 끝낸 뒤 사용한다. 로봇에 INIT_POSE 를 재주입하지
+    않고(이미 교정됨) 현재 보고 좌표를 신뢰 위치로 채택한다. 충전/비충전 모두 사용 가능.
+    (충전 중 자동 복구가 있으나, 즉시 확정하거나 비충전 상황에서 쓰기 위한 수동 경로.)
+    """
+    rid = _select_robot_id(robot_id)
+    if rid is None:
+        return {"status": "error", "confirmed": False, "msg": "로봇을 찾을 수 없습니다."}
+    from app.robot_control.auto_init_pose import confirm_current_position_manual
+    ok, reason = confirm_current_position_manual(rid)
+    return {
+        "status": "ok" if ok else "error",
+        "confirmed": ok,
+        "msg": reason,
+    }
+
+
+@router.post("/robot/initpose/auto-test", dependencies=_ADMIN)
+def auto_test_initpose():
+    """[디버그] 전원 사이클 없이 '자동 init_pose' 파이프라인을 즉시 실행한다.
+
+    전원 on 상승에지를 기다리지 않고 in-process 로 `_inject_worker` 를 돌리므로
+    resolve_init_pose(dock_anchor 우선) → 준비대기 재시도 → 수렴검증 → escalation
+    전체를 실제와 동일하게 탄다. 로그는 `[AUTO-INITPOSE]` 로 확인.
+
+    ⚠️ 실제 로봇 localization 을 시드 좌표로 재설정한다(수동 '위치 재조정'과 동일한 물리 효과).
+    """
+    from app.robot_io import ROBOT_IP
+    rid = runtime.get_robot_id_by_ip(ROBOT_IP)
+    if rid is None:
+        return {"status": "error", "msg": "로봇을 찾을 수 없습니다."}
+
+    import threading
+    from app.robot_control.auto_init_pose import _inject_worker, resolve_init_pose
+
+    pose, source = resolve_init_pose(rid)  # 어떤 소스가 선택될지 응답에 미리 노출
+    threading.Thread(
+        target=_inject_worker, args=(rid,), daemon=True, name="auto_initpose_test"
+    ).start()
+    return {
+        "status": "ok",
+        "msg": f"robot {rid} 자동 init_pose 파이프라인 실행 — 로그([AUTO-INITPOSE])로 진행 확인",
+        "resolved_source": source,
+        "resolved_pose": pose,
+    }
+
+
+@router.post("/robot/_debug/sim-poweron", dependencies=_ADMIN)
+def sim_poweron():
+    """[디버그] 전원 사이클 없이 '전원 on 상승에지'를 시뮬레이션한다.
+
+    auto-test(=주입만 즉시 실행)와 달리, 이건 ①전원 on 감지(트리거)까지 실제 경로로 탄다:
+    상태를 리셋해 두면 로봇이 online 인 동안 다음 status heartbeat(약 1초 내)의
+    check_and_init_pose 가 상승에지로 인식 → 자동으로 _inject_worker 가 발화한다.
+
+    ⚠️ 로봇/리시버가 응답 중(STATUS heartbeat 수신)이어야 트리거가 발화한다.
+       로봇 localization 이 시드 좌표로 실제 재설정된다(실로봇 영향 있음).
+    """
+    from app.robot_io import ROBOT_IP
+    rid = runtime.get_robot_id_by_ip(ROBOT_IP)
+    if rid is None:
+        return {"status": "error", "msg": "로봇을 찾을 수 없습니다."}
+
+    from app.robot_control.auto_init_pose import force_power_on_edge
+    force_power_on_edge(rid)
+    return {
+        "status": "ok",
+        "msg": f"robot {rid} 전원 on 상승에지 시뮬레이션 — 다음 heartbeat(~1s)에 자동 주입 발화. "
+               f"로그([AUTO-INITPOSE])로 확인하세요.",
+        "note": "로봇/리시버가 online 응답 중이어야 트리거가 발화합니다.",
+    }
+
+
+# 장소 데이터 지문 — 화면은 /robot/status 를 주기적으로 받으므로 헤더(X-Places-Rev)에 실어 주면,
+# 장소가 바뀐 때만 장소 목록을 다시 받을 수 있다. 장소를 바꾸는 코드가 여러 곳(장소 화면·지점 저장·맵 삭제 등)이라
+# 쓰는 쪽에서 버전을 올리는 대신 DB 내용을 직접 본다. 63행 약 6ms, 화면 수와 무관하게 2초에 한 번만 계산한다.
+# 장소가 수만 개로 늘면 트리거로 관리하는 변경 번호로 바꾼다(이 함수만 교체).
+_PLACES_REV_TTL_S = 2.0
+_places_rev_cache: tuple[float, str] = (0.0, "")
+
+
+def _places_rev(db: Session) -> str:
+    global _places_rev_cache
+    now = time.monotonic()
+    if now - _places_rev_cache[0] < _PLACES_REV_TTL_S and _places_rev_cache[1]:
+        return _places_rev_cache[1]
+    try:
+        count, crc = db.execute(text(
+            "SELECT COUNT(*), COALESCE(SUM(CRC32(CONCAT_WS('|', id, LacationName, LocationX, LocationY,"
+            " MapId, FloorId, Category))), 0) FROM location_info"
+        )).one()
+    except Exception as e:  # noqa: BLE001 — 지문을 못 구해도 상태 응답은 내보낸다(화면은 헤더가 없으면 갱신하지 않을 뿐)
+        print(f"[STATUS] 장소 지문 계산 실패: {e}")
+        return ""
+    rev = f"{count}-{crc}"
+    _places_rev_cache = (now, rev)
+    return rev
+
+
+@router.get("/robot/status")
+def get_status(request: Request, response: Response, db: Session = Depends(get_db)):
+    from app.auth.dependencies import get_current_user, is_admin, get_business_robot_ids
+    current_user = get_current_user(request, db)
+    rev = _places_rev(db)
+    if rev:
+        response.headers["X-Places-Rev"] = rev
+    all_statuses = runtime.get_all_statuses()
+    if is_admin(current_user) or not current_user.BusinessId:
+        return all_statuses
+    biz_robot_ids = get_business_robot_ids(db, current_user.BusinessId)
+    return [s for s in all_statuses if s["robot_id"] in biz_robot_ids]
+
+
+def _probe_receiver(timeout: float = 1.5) -> dict:
+    """receiver.py UDP 응답 확인.
+
+    새 receiver는 PING에 즉시 응답한다. 아직 갱신되지 않은 receiver와도 호환되도록
+    STATUS 요청을 한 번 더 시도한다.
+    """
+    started = time.monotonic()
+    last_error = None
+    for action in ("PING", "STATUS"):
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.settimeout(timeout)
+        try:
+            sock.sendto(json.dumps({"action": action}).encode("utf-8"), (RECEIVER_IP, RECEIVER_PORT))
+            data, _ = sock.recvfrom(8192)
+            elapsed_ms = round((time.monotonic() - started) * 1000, 1)
+            payload = json.loads(data.decode("utf-8"))
+            return {
+                "reachable": True,
+                "action": action,
+                "latency_ms": elapsed_ms,
+                "response": payload,
+            }
+        except Exception as exc:
+            last_error = str(exc)
+        finally:
+            sock.close()
+    return {
+        "reachable": False,
+        "action": None,
+        "latency_ms": None,
+        "error": last_error or "receiver did not respond",
+    }
+
+
+@router.get("/robot/connection")
+def get_robot_connection():
+    """Docker 관제 서버 ↔ receiver/NOS ↔ 로봇 연결 진단.
+
+    공유기/로봇망에 관제 PC가 붙은 뒤 이 API로 컨테이너가 실제 어느 IP/port를
+    바라보는지와 receiver 응답 여부를 바로 확인한다.
+    """
+    rid = runtime.get_robot_id_by_ip(ROBOT_IP)
+    position = runtime.get_position(rid) if rid is not None else None
+    statuses = runtime.get_all_statuses()
+    status = next((item for item in statuses if item.get("robot_id") == rid), None)
+
+    return {
+        "configured": {
+            "robot": {"ip": ROBOT_IP, "udp_port": ROBOT_PORT},
+            "receiver": {
+                "ip": RECEIVER_IP,
+                "udp_port": RECEIVER_PORT,
+                "tcp_port": RECEIVER_TCP_PORT,
+            },
+        },
+        "receiver_udp": _probe_receiver(),
+        "runtime": {
+            "robot_id": rid,
+            "position": position,
+            "status": status,
+        },
+    }
+
+
+@agent_router.get("/robot/nav", dependencies=[Depends(require_user_or_agent)])
+def get_nav():
+    from app.navigation.send_move import (
+        is_navigating, current_wp_index, waypoints_list, nav_loop_remaining, nav_loop_total,
+        nav_loop_count, nav_loop_infinite, last_wp_unreached, get_nav_cue, heading_wp_no,
+    )
+    from app.navigation import obstacle_hold
+    total = len(waypoints_list)
+    unreached = last_wp_unreached()
+    return {
+        "is_navigating": is_navigating,
+        # 정상 완주는 인덱스를 끝에 둔 채 멈추고, 정지(stop_navigation_internal)는 0 으로
+        # 되돌린다. 그래서 '멈춤 + 끝까지 감' 이면 도착이다 — 음성 단계 엔진이 이걸로
+        # 도착과 중단을 가른다.
+        # 마지막 WP 를 재전송 한도 초과로 건너뛰고 끝났으면 도착이 아니다(로봇이 제자리에 있다).
+        "arrived": (not is_navigating) and total > 0 and current_wp_index >= total and not unreached,
+        "unreached": unreached,
+        "current_wp": heading_wp_no(),   # 다지점 묶음 중이면 로봇이 지금 향하는 점
+        "total_wp": total,
+        "loop_remaining": nav_loop_remaining,
+        "loop_total": nav_loop_total,
+        "loop_count": nav_loop_count,
+        "loop_infinite": nav_loop_infinite,
+        # 경유지 통과 순간의 방향 안내 {seq, text} — 음성 엔진이 seq 가 바뀌면 말한다(turn_cues)
+        "cue": get_nav_cue(),
+        # 안내 중 장애물 정지 — 정지 중이면 음성 엔진은 동행 질문·도착 대기 시간을 쉬고, notice {seq, text} 를 말한다
+        "obstacle": obstacle_hold.snapshot(),
+        "notice": obstacle_hold.get_notice(),
+    }

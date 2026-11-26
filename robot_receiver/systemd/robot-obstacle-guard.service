@@ -1,0 +1,28 @@
+# 안내 중 전방 장애물 감지(2026-10-29) — 669 NOS 방식(/home/user/Control_system, root·ROS2 환경).
+# 설치·배포는 robot_receiver/tools/nos_receiver.py 의 guard-install·guard-deploy 가 같은 내용을 쓴다(그쪽이 정본).
+# 판단은 관제가 안내 시나리오 이동 중에 UDP(40100)로 켤 때만, 신호가 3초 끊기면 스스로 끈다.
+# 설정은 obstacle_guard.env(OBSTACLE_RECORD_ONLY 등, obstacle_core.Params).
+[Unit]
+Description=Obstacle guard (ROS2 /LOC_BODY_POINTS -> CANCEL_NAV via receiver.py, 2026-10-29)
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+WorkingDirectory=/home/user/Control_system
+# HOME 이 없으면 rclpy.init 이 로그 폴더를 못 찾아 죽는다(10-29 실기) — relay-motion 과 같게
+Environment=HOME=/root
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=-/home/user/Control_system/obstacle_guard.env
+ExecStart=/bin/bash -c 'source /opt/robot/scripts/setup_ros2.sh && exec python3 obstacle_guard.py'
+Nice=10
+CPUQuota=60%
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=obstacle-guard
+
+[Install]
+WantedBy=multi-user.target

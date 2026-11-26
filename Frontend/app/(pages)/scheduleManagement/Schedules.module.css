@@ -1,0 +1,47 @@
+/* 상태 범례는 WorkSchedule(캘린더 툴바 아래)로 이관됨 — 색을 쓰는 곳 옆에 둔다. */
+
+/* ─── 탭 메뉴 ─── */
+.scheduleTab {
+    display: flex;
+    gap: 6px;
+    margin-bottom: 0;
+}
+
+.scheduleTab div {
+    background: var(--surface-tab-inactive);
+    border-radius: 8px 8px 0 0;
+    width: 120px;
+    height: var(--tab-height);
+    font-size: var(--font-size-md);
+    font-weight: 600;
+    color: var(--text-muted);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.2s ease, color 0.2s ease;
+}
+
+.scheduleTab div:hover {
+    color: var(--text-tertiary);
+}
+
+.scheduleTab div.active {
+    background: var(--surface-3);
+    color: var(--text-primary);
+}
+
+/* 응대 세션 · 실행 이력 패널 — 캘린더 패널(ScheduleContainer)과 같은 껍데기.
+   우상단은 탭이 붙는 자리라 각지게 둔다(다른 메뉴와 동일 규약). */
+.runHistoryPanel {
+    background: var(--surface-3);
+    border-radius: 15px 0 15px 15px;
+    width: 100%;
+    flex: 1;
+    min-height: 0;
+    min-width: var(--content-min-width);
+    padding: 22px 25px;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}

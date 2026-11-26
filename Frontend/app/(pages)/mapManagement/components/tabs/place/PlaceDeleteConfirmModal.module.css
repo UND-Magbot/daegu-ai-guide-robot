@@ -1,0 +1,87 @@
+/* 모달 delete 추가 알림 css */
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 120;
+}
+
+.box {
+  width: 360px;
+  border-radius: 12px;
+  background: var(--surface-3); /* PD-01: #282d43 리터럴 → 토큰 */
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35); /* PD-04: 다른 모달과 그림자 깊이 통일 */
+  position: relative;
+  padding: 32px 24px 24px;
+}
+
+.closeBtn {
+  background: transparent;
+  border: none;
+  color: var(--text-primary, #fff);
+  font-size: var(--font-size-md); /* PD-02 */
+  position: absolute;
+  top: 14px;
+  right: 16px;
+  cursor: pointer;
+  transition: opacity 0.15s ease;
+}
+
+.closeBtn:hover {
+  opacity: 0.7;
+}
+
+.message {
+  margin: 16px 0 24px 0;
+  text-align: center;
+  white-space: pre-line;
+  font-size: var(--font-size-md); /* PD-02 */
+  color: var(--text-primary, #fff);
+  line-height: 1.5;
+}
+
+.footer {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+}
+
+.btnItemCommon {
+  flex: 1;
+  height: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 7px;
+  border: none;
+  cursor: pointer;
+  color: var(--text-primary); /* PD-02: #ffffff → 토큰 */
+  font-size: var(--font-size-base);
+  transition: background 0.15s ease;
+}
+
+.btnItemCommon img {
+  width: 11px;
+  height: 11px;
+  margin-right: 8px;
+}
+
+.btnBgRed {
+  border: 1px solid var(--color-error-border); /* PD-01: 리터럴 → 토큰 */
+  background: var(--color-error-bg);
+}
+.btnBgRed:hover {
+  background: var(--color-error-hover); /* PD-01: 상호작용 피드백 추가 */
+}
+
+.btnBgBlue {
+  border: 1px solid var(--color-info-border);
+  background: var(--color-info-bg);
+}
+.btnBgBlue:hover {
+  background: #1d7aab;
+}

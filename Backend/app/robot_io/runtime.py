@@ -1,0 +1,1064 @@
+"""
+인메모리 로봇 런타임 상태 관리 모듈.
+
+DB에 저장하지 않는 실시간 데이터(배터리, 위치, 네트워크 상태)를
+로봇별로 관리한다. 스레드 안전.
+"""
+
+import json
+import time
+import threading
+from typing import Optional
+
+# ── 상수 ──────────────────────────────────────────────
+# 네트워크 판정 임계 (혼잡 무선 대응 — 비대칭 히스테리시스).
+# heartbeat가 하나만 새로 도착해도 즉시 Online으로 복귀하지만, Offline 확정은
+# 느리게 둔다. 전시장처럼 패킷 손실이 잦은 무선에서 일시 유실로 카드가
+# Offline↔Online으로 깜빡이는 것을 막기 위함.
+ONLINE_MAX_AGE = 12     # ≤12초 → Online
+ERROR_MAX_AGE = 35      # 12~35초 → Error(불안정, 직전 상태 유지), >35초 → Offline
+
+_DUAL_BATTERY_TYPES = {"기본 4족", "순찰 4족", "보안 4족"}
+
+def _is_dual_battery(robot_type: str) -> bool:
+    """한글 로봇타입 기준으로 듀얼 배터리(L/R) 여부 판별."""
+    return (robot_type or "") in _DUAL_BATTERY_TYPES
+
+
+def battery_percent(battery: dict, robot_type: str) -> Optional[int]:
+    """배터리 잔량(%) 추출. 듀얼은 더 낮은 셀 기준(보수적). 값이 없으면 None."""
+    if _is_dual_battery(robot_type):
+        vals = [int(v) for v in (battery.get("BatteryLevelLeft"),
+                                 battery.get("BatteryLevelRight")) if v is not None]
+        return min(vals) if vals else None
+    soc = battery.get("SOC")
+    return int(soc) if soc is not None else None
+
+
+# 배터리 오독 필터 — 혼잡 무선에서 receiver가 통신 끊김 순간 0/디폴트값을 흘려
+# 정상값(예: 99%) 위에 0%가 덮어써지고, 이로 인해 헛 자동 충전복귀가 트리거되는
+# 것을 막는다. 물리적으로 가능한 최대 방전 속도를 넘는 '직전 정상값 대비 급락'은
+# 측정 오류로 보고 직전 정상값을 유지한다(진짜 방전은 점진적이라 통과된다).
+BATTERY_MAX_DRAIN_PCT_PER_SEC = 0.2   # 사실상 상한(실제 4족 부하 방전 ~1~2%/분보다 큼)
+BATTERY_DRAIN_MARGIN_PCT = 5          # 측정 양자화/지터 여유
+
+# 완충 판정 임계(%) — 이 이상이면 '완충'으로 보고 charge_state 5(도크·전류없음)를
+# 트리클 off 정상상태로 취급(이상 로그·에러 표시 제외). 완충 아닌데 state 5면 진짜 도킹 에러.
+CHARGE_FULL_PCT = 90
+
+# 콜드스타트 디바운스 — 신뢰할 직전 정상값이 전혀 없는 상태(DB 이력 없는 신규 로봇,
+# 첫 heartbeat)에서 임계치 이하(특히 0%) reading은 통신 오독일 수 있으므로
+# N회 연속 확인된 뒤에야 채택한다. 진짜 저전력이면 N회 연속 관측되어 통과된다.
+BATTERY_LOW_CONFIRM_COUNT = 3
+
+# ── 내부 저장소 ───────────────────────────────────────
+_lock = threading.Lock()
+_runtime: dict[int, dict] = {}      # robot_info.id → 런타임 상태
+
+
+# ── 초기화 ────────────────────────────────────────────
+
+def init_runtime(robots, last_statuses: Optional[dict] = None) -> None:
+    """서버 시작 시 DB의 RobotInfo 목록으로 런타임 초기화.
+
+    last_statuses: {robot_id: RobotLastStatus} — DB에서 읽은 마지막 상태.
+    값이 있으면 인메모리 초기값으로 복원하여 서버 재시작 시 상태 유실을 방지.
+    """
+    last_statuses = last_statuses or {}
+    with _lock:
+        _runtime.clear()
+        restored = 0
+        for r in robots:
+            entry = {
+                "robot_id": r.id,
+                "robot_name": r.RobotName or "",
+                "robot_type": r.RobotType or "",
+                "robot_ip": r.RobotIP,
+                "robot_port": r.RobotPort or 30000,
+                "current_floor_id": r.CurrentFloorId,
+                "current_map_id": getattr(r, "CurrentMapId", None),
+                "business_id": r.BusinessId,
+                "limit_battery": int(r.LimitBattery) if r.LimitBattery is not None else 30,
+                "position": {"x": 0.0, "y": 0.0, "yaw": 0.0, "timestamp": 0},
+                "battery": {},
+                "charge_state": {"state": 0, "error_code": 0, "timestamp": 0},
+                "device_temp": {},
+                "basic_status": {},  # {Sleep, PowerManagement} — 1002/6 응답
+                "abnormal_codes": set(),  # 현재 활성 errorCode 집합 — 1002/3 응답(차집합 감지용)
+                "last_heartbeat": 0,
+                "nav": {"arrived": False, "last_state": None, "timestamp": 0},
+            }
+
+            # DB에서 마지막 상태 복원
+            ls = last_statuses.get(r.id)
+            if ls and ls.LastHeartbeat:
+                if _is_dual_battery(r.RobotType):
+                    entry["battery"] = {
+                        "BatteryLevelLeft": ls.BatteryLevel1,
+                        "BatteryLevelRight": ls.BatteryLevel2,
+                        "VoltageLeft": ls.Voltage1,
+                        "VoltageRight": ls.Voltage2,
+                        "battery_temperatureLeft": ls.BatteryTemp1,
+                        "battery_temperatureRight": ls.BatteryTemp2,
+                        "chargeLeft": bool(ls.IsCharging1),
+                        "chargeRight": bool(ls.IsCharging2),
+                    }
+                else:
+                    entry["battery"] = {
+                        "SOC": ls.BatteryLevel1,
+                        "Voltage": ls.Voltage1,
+                        "BatteryTemp": ls.BatteryTemp1,
+                        "Charging": bool(ls.IsCharging1),
+                    }
+                if ls.PosX is not None:
+                    entry["position"] = {
+                        "x": ls.PosX or 0.0,
+                        "y": ls.PosY or 0.0,
+                        "yaw": ls.PosYaw or 0.0,
+                        "timestamp": 0,
+                    }
+                    # DB 마지막 위치 = 신뢰 위치. 재시작 직후 이미 미확정인 로봇도
+                    # 맵에 마지막 신뢰 위치를 표시할 수 있도록 시드한다(timestamp는 마지막 heartbeat).
+                    entry["_last_trusted_position"] = {
+                        "x": ls.PosX or 0.0,
+                        "y": ls.PosY or 0.0,
+                        "yaw": ls.PosYaw or 0.0,
+                        "timestamp": ls.LastHeartbeat.timestamp(),
+                    }
+                # 현재 층은 robot_info.CurrentFloorId(line 74)가 유일한 권위 소스다.
+                # '현재 층 변경'(activate_map)·로봇 정보 수정이 robot_info 에 즉시 기록하므로
+                # 재시작 시에도 그대로 살아난다. robot_last_status.CurrentFloorId 는
+                # '저장된 위치(PosX/PosY)가 어느 층 것인지' 표시용(auto_init_pose 층 정합 가드)일
+                # 뿐이라 여기서 현재 층으로 덮어쓰면 안 된다. (덮어쓰면 stale 한 층 캐시가
+                # robot_info 를 이기고, 재시작마다 그 값이 다시 기록되는 자기강화 루프에 빠진다.)
+                entry["last_heartbeat"] = ls.LastHeartbeat.timestamp()
+                # 배터리 오독 필터를 DB 복원값으로 미리 무장한다.
+                # 이걸 안 하면 재시작 후 첫 heartbeat가 콜드스타트로 취급돼
+                # 급락 필터가 동작하지 않는다.
+                restored_pct = battery_percent(entry["battery"], r.RobotType)
+                if restored_pct is not None:
+                    entry["_last_good_battery_pct"] = restored_pct
+                    entry["_last_good_battery_ts"] = entry["last_heartbeat"]
+                restored += 1
+
+            _runtime[r.id] = entry
+        print(f"[OK] robot_runtime 초기화 완료: {len(_runtime)}대 (DB 복원: {restored}대)")
+
+
+# ── 상태 업데이트 ─────────────────────────────────────
+
+def update_status(robot_id: int, battery: dict, timestamp: float,
+                   charge_state: dict | None = None,
+                   device_temp: dict | None = None,
+                   basic_status: dict | None = None,
+                   gait: int | None = None,
+                   abnormal_status: list | None = None) -> None:
+    """heartbeat 수신 시 배터리, 충전 상태, 디바이스 온도, 기본 상태(Sleep/PowerManagement), 보행(gait), 비정상 에러(abnormal_status) 갱신."""
+    charge_log_payload = None  # 락 밖에서 처리할 charge_state 변화 정보
+    battery_glitch_payload = None  # 락 밖에서 처리할 배터리 오독 감지 정보
+    abnormal_payloads = []  # 락 밖에서 처리할 (code, component, appeared) 리스트
+    with _lock:
+        entry = _runtime.get(robot_id)
+        if not entry:
+            return
+        # 응답이 도달했으면 last_heartbeat는 항상 갱신.
+        # battery는 빈 dict로 왔을 때 기존 값을 덮어쓰지 않도록 한다.
+        entry["last_heartbeat"] = timestamp
+        if battery:
+            # 배터리 오독 필터.
+            #  - 워밍(직전 정상값 있음): 물리적으로 불가능한 급락(예: 99%→0%)은 오독으로 무시.
+            #  - 콜드스타트(직전 정상값 없음): 임계치 이하 reading은 N회 연속 확인 전엔 보류.
+            # 진짜 방전은 단계가 작거나 N회 연속 관측되므로 실제 저전력은 그대로 감지된다.
+            new_pct = battery_percent(battery, entry.get("robot_type", ""))
+            prev_pct = entry.get("_last_good_battery_pct")
+            prev_ts = entry.get("_last_good_battery_ts", 0.0)
+            limit = int(entry.get("limit_battery") or 0)
+
+            hold_reason = None  # None=채택, "glitch"=급락 오독, "pending"=콜드 미확인
+            if new_pct is not None and prev_pct is not None:
+                elapsed = max(timestamp - prev_ts, 1.0)
+                max_drop = BATTERY_MAX_DRAIN_PCT_PER_SEC * elapsed + BATTERY_DRAIN_MARGIN_PCT
+                if (prev_pct - new_pct) > max_drop:
+                    hold_reason = "glitch"
+            elif new_pct is not None and prev_pct is None and limit > 0 and new_pct <= limit:
+                cnt = entry.get("_cold_low_count", 0) + 1
+                entry["_cold_low_count"] = cnt
+                if cnt < BATTERY_LOW_CONFIRM_COUNT:
+                    hold_reason = "pending"
+
+            if hold_reason == "glitch":
+                # 직전 정상 배터리값 유지. 오독 구간 진입 시 1회만 DB 로그.
+                if not entry.get("_battery_glitch_active"):
+                    entry["_battery_glitch_active"] = True
+                    battery_glitch_payload = (prev_pct, new_pct)
+                print(f"[BATTERY] 오독 무시(급락): {prev_pct}% → {new_pct}% (직전 정상값 유지)")
+            elif hold_reason == "pending":
+                print(f"[BATTERY] 콜드스타트 저전력 미확인: {new_pct}% ≤ 임계치 {limit}% — "
+                      f"{entry['_cold_low_count']}/{BATTERY_LOW_CONFIRM_COUNT}회 확인 중(보류)")
+            else:
+                entry["battery"] = battery
+                if new_pct is not None:
+                    entry["_last_good_battery_pct"] = new_pct
+                    entry["_last_good_battery_ts"] = timestamp
+                entry["_cold_low_count"] = 0
+                entry["_battery_glitch_active"] = False
+        if charge_state:
+            # charge_state 변화 감지 (도킹 실패 원인 진단용)
+            prev_cs = entry.get("charge_state") or {}
+            prev_state = prev_cs.get("state")
+            prev_err = prev_cs.get("error_code")
+            new_state = charge_state.get("state")
+            new_err = charge_state.get("error_code")
+            if prev_state != new_state or prev_err != new_err:
+                # 완충 여부를 함께 실어 보낸다: state 5(전류 없음)·err 4103 은 완충 트리클 off 시
+                # 정상이므로 이상 로그에서 제외하기 위함(락 밖 처리에서 판정).
+                _bpct = battery_percent(entry.get("battery") or {}, entry.get("robot_type", ""))
+                _batt_full = _bpct is not None and _bpct >= CHARGE_FULL_PCT
+                charge_log_payload = (prev_state, new_state, prev_err, new_err, _batt_full)
+            entry["charge_state"] = charge_state
+        if basic_status is not None:
+            # None이 들어올 수 있으므로 기존 값 유지 방식으로 병합
+            merged = dict(entry.get("basic_status") or {})
+            for k in ("Sleep", "PowerManagement", "MotionState", "BootId"):
+                v = basic_status.get(k)
+                if v is not None:
+                    merged[k] = v
+            entry["basic_status"] = merged
+        if gait is not None:
+            entry["gait"] = gait
+        if abnormal_status is not None:
+            # 활성 에러 코드 집합의 변화(발생/해소)만 감지 → 2Hz 폭주 없이 전이 순간만 로깅.
+            # errorCode는 10진/"0x" 문자열 모두 방어적으로 int 변환.
+            new_map: dict[int, object] = {}
+            for e in abnormal_status:
+                try:
+                    raw = e.get("errorCode")
+                    if raw is None:
+                        continue
+                    code = int(raw, 16) if isinstance(raw, str) and raw.lower().startswith("0x") else int(raw)
+                    new_map[code] = e.get("component")
+                except (ValueError, TypeError, AttributeError):
+                    continue
+            new_codes = set(new_map)
+            prev_codes = entry.get("abnormal_codes", set())
+            appeared = new_codes - prev_codes
+            resolved = prev_codes - new_codes
+            if appeared or resolved:
+                abnormal_payloads = (
+                    [(c, new_map.get(c), True) for c in appeared]
+                    + [(c, None, False) for c in resolved]
+                )
+            entry["abnormal_codes"] = new_codes
+
+        # is_charging 디바운스: 충전→비충전 전환은 5회 연속 확인 후 반영.
+        # 오독으로 거부된 배터리 대신 채택된(직전 정상 포함) 값으로 판정한다.
+        now_charging = _check_charging(entry["battery"])
+        if charge_state and charge_state.get("state", 0) == 2:
+            now_charging = True
+        was_charging = entry.get("_is_charging", False)
+
+        if was_charging and not now_charging:
+            drop = entry.get("_charging_drop_count", 0) + 1
+            entry["_charging_drop_count"] = drop
+            if drop >= 15:
+                entry["_is_charging"] = False
+                entry["_charging_drop_count"] = 0
+        else:
+            entry["_is_charging"] = now_charging
+            entry["_charging_drop_count"] = 0
+
+        # 도크 점유(충전 완료 후 충전소 대기) 추적 — '충전 해제(언도킹)' 버튼 노출용.
+        #  · 충전 중/도킹 진행/완충 도크(state 1·2·5) → 도크에 물림 (set)
+        #    (state 5 = 도크에 있지만 전류 없음 = 완충 트리클 off 상태로도 물리적으론 도크에 있음)
+        #  · 대기(0)·도크에서 나가기(3) → 도크 미점유/떠남 (clear)
+        #  · 주행 시작 → 도크를 떠남 (clear)
+        # 위치 기반 판정은 좌표 부정확 + '자율주행 후 충전소 근처 정지' 오판이 있어 쓰지 않는다.
+        cur_state = (charge_state or {}).get("state", entry.get("charge_state", {}).get("state", 0))
+        if now_charging or cur_state in (1, 2, 5):
+            entry["_docked_idle"] = True
+        elif cur_state in (0, 3):
+            # 대기(0)·도크에서 나가기(3) = 도크 미점유/떠남 → 점유 해제.
+            # 특히 도킹 실패로 state 1→0 이 되면 여기서 해제돼 '충전 해제' 버튼 오노출을 막는다.
+            entry["_docked_idle"] = False
+        else:
+            try:
+                from app.navigation.send_move import is_nav_active
+                if is_nav_active():
+                    entry["_docked_idle"] = False
+            except Exception:
+                pass
+
+        if device_temp:
+            entry["device_temp"] = device_temp
+
+    # 락 밖에서 배터리 오독 감지 로그 (오독 구간 진입 시 1회만)
+    if battery_glitch_payload is not None:
+        prev_pct, new_pct = battery_glitch_payload
+        try:
+            from app.logs.service import log_event
+            from app.user_cache import get_robot_name, get_robot_business_id
+            log_event(
+                "error", "battery_misread",
+                f"배터리 오독 감지 — {prev_pct}% → {new_pct}% 무시(직전 정상값 유지)",
+                detail="통신 불안정 구간의 순간 측정 오류로 추정. 자동 충전복귀 오발동 방지를 위해 무시함.",
+                robot_id=robot_id, robot_name=get_robot_name(), business_id=get_robot_business_id(),
+            )
+        except Exception as e:
+            print(f"[WARN] battery_misread 로그 실패: {e}")
+
+    # 락 밖에서 charge_state 변화 로그 처리 (락 보유 시간 최소화)
+    if charge_log_payload is not None:
+        prev_state, new_state, prev_err, new_err, batt_full = charge_log_payload
+        state_label = _CHARGE_STATE_LABEL.get(new_state, f"unknown({new_state})")
+        err_code = new_err if new_err is not None else 0
+        err_label = _CHARGE_ERROR_MSG.get(new_err, f"unknown(0x{err_code:04X})")
+        print(
+            f"[CHARGE] state {prev_state}→{new_state} ({state_label}), "
+            f"error_code={new_err} ({err_label})"
+        )
+        # 비정상 상태(4=로봇 오류, 5=도크에 있지만 전류 없음)나 신규 실에러 코드는 DB에도 기록.
+        # 단 state 5 + err 4103(전류 없음)은 완충(배터리 CHARGE_FULL_PCT 이상)이면 트리클 off
+        # 정상상태이므로 이상 로그에서 제외한다(완충 트리클 오실레이션 시 로그 스팸 방지).
+        normal_full_dock = new_state == 5 and batt_full
+        is_abnormal_state = new_state == 4 or (new_state == 5 and not batt_full)
+        is_real_error = (not normal_full_dock) and new_err not in (None, 0, 1) and prev_err != new_err
+        if is_abnormal_state or is_real_error:
+            try:
+                from app.logs.service import log_event
+                from app.user_cache import get_robot_name, get_robot_business_id
+                log_event(
+                    "robot",
+                    "charge_state_change",
+                    f"충전 상태: {state_label} / 에러 코드={new_err} ({err_label})",
+                    robot_id=robot_id,
+                    robot_name=get_robot_name(),
+                    business_id=get_robot_business_id(),
+                )
+            except Exception as e:
+                print(f"[WARN] charge_state DB 로그 실패: {e}")
+
+    # 락 밖에서 비정상 에러(abnormal_status) 발생/해소 로그 처리.
+    # 코드를 error_codes 테이블·부위 분류와 매칭해 "어디서 난 오류인지"를 메시지에 담는다.
+    if abnormal_payloads:
+        try:
+            from app.robot_io.error_codes import (
+                ROBOT_ERROR_CODES, get_error_category, is_informational, is_warning,
+            )
+            from app.logs.service import log_event
+            from app.user_cache import get_robot_name, get_robot_business_id
+            rname = get_robot_name()
+            rbiz = get_robot_business_id()
+        except Exception as e:
+            print(f"[WARN] abnormal_status 로그 준비 실패: {e}")
+            ROBOT_ERROR_CODES = None
+
+        if ROBOT_ERROR_CODES is not None:
+            for code, comp, appeared in abnormal_payloads:
+                category = get_error_category(code)
+                comp_suffix = f" (부위: {comp})" if comp else ""
+                err_hex = f"0x{code:04X}"
+                if appeared:
+                    if code in ROBOT_ERROR_CODES:
+                        msg = ROBOT_ERROR_CODES[code]
+                        if msg is None:   # 0x0000 등 정상값 — 알림 안 함
+                            continue
+                    else:
+                        msg = f"미등록 코드({err_hex})"
+                    # 정보성(안내) 코드는 정상 동작 중 함께 오는 코드이므로 error 알림(확인창)으로
+                    # 띄우지 않고 추적용 로그만 남긴다. (예: 0x8506 자율 충전 중 도크 무전류 — 오탐 방지)
+                    if is_informational(code):
+                        try:
+                            log_event(
+                                "robot", "robot_error_info",
+                                f"[{category}] {msg}{comp_suffix}",
+                                detail=f"부위: {comp}" if comp else None,
+                                error_json=json.dumps(
+                                    {"error_code": err_hex, "category": category, "component": comp},
+                                    ensure_ascii=False),
+                                robot_id=robot_id, robot_name=rname, business_id=rbiz,
+                            )
+                        except Exception as e:
+                            print(f"[WARN] robot_error_info 로그 실패: {e}")
+                        continue
+                    # 경고성 코드는 실제 문제이나 확인창(error 알림)은 억제하고 경고/추적 로그만 남긴다.
+                    # (예: 0x8503 자율 충전 중 비정상 위치 — 측위/도킹 개선 전까지 확인창 스팸 방지)
+                    if is_warning(code):
+                        try:
+                            log_event(
+                                "robot", "robot_error_warning",
+                                f"[{category}] {msg}{comp_suffix}",
+                                detail=f"부위: {comp}" if comp else None,
+                                error_json=json.dumps(
+                                    {"error_code": err_hex, "category": category, "component": comp},
+                                    ensure_ascii=False),
+                                robot_id=robot_id, robot_name=rname, business_id=rbiz,
+                            )
+                        except Exception as e:
+                            print(f"[WARN] robot_error_warning 로그 실패: {e}")
+                        continue
+                    try:
+                        log_event(
+                            "error", "robot_error_code",
+                            f"[{category}] {msg}{comp_suffix}",
+                            detail=f"부위: {comp}" if comp else None,
+                            error_json=json.dumps(
+                                {"error_code": err_hex, "category": category, "component": comp},
+                                ensure_ascii=False),
+                            robot_id=robot_id, robot_name=rname, business_id=rbiz,
+                        )
+                    except Exception as e:
+                        print(f"[WARN] robot_error_code 로그 실패: {e}")
+                else:
+                    # 해소 — 로그만 남기고 알림은 띄우지 않음(설계서 §5 MVP)
+                    label = ROBOT_ERROR_CODES.get(code) or err_hex
+                    try:
+                        log_event(
+                            "robot", "robot_error_resolved",
+                            f"[{category}] {label} 해소",
+                            error_json=json.dumps(
+                                {"error_code": err_hex, "category": category}, ensure_ascii=False),
+                            robot_id=robot_id, robot_name=rname, business_id=rbiz,
+                        )
+                    except Exception as e:
+                        print(f"[WARN] robot_error_resolved 로그 실패: {e}")
+
+
+def update_position(robot_id: int, x: float, y: float, yaw: float,
+                    location: int | None = None, age: float | None = None) -> None:
+    """위치 수신 시 좌표 갱신.
+
+    location: 로봇이 보고한 측위 상태(ASDU 1007/2 Location, 0=정상). None 이면 직전 값을 유지한다
+        — 운영자 확정 등 관제 내부 갱신은 측위 상태를 모르므로, 지우면 직후 판정이 '모름'이 된다.
+    age: receiver 가 이 좌표를 로봇에게서 받은 뒤 지난 초. receiver 는 로봇 응답이 끊겨도 마지막
+        좌표를 계속 돌려주므로, 받은 시각이 아니라 로봇 샘플 시각으로 찍어야 신선도 판정이 맞다.
+        None(구버전 receiver) 이면 받은 시각으로 찍는다.
+    """
+    with _lock:
+        entry = _runtime.get(robot_id)
+        if not entry:
+            return
+        if location is None:
+            location = (entry.get("position") or {}).get("location")
+        entry["position"] = {
+            "x": x,
+            "y": y,
+            "yaw": yaw,
+            "timestamp": time.time() - max(0.0, age or 0.0),
+        }
+        if location is not None:
+            entry["position"]["location"] = location
+        # '마지막 신뢰 위치' 스냅샷 — 위치가 신뢰 가능(미확정 아님)할 때만 갱신한다.
+        # 미확정(initpose_pending: localization 발산/리셋 등) 중에는 발산 좌표로 덮어쓰지
+        # 않아, 맵 마커가 발산을 따라 맵 밖으로 사라지지 않고 마지막 신뢰 위치에 고정된다.
+        if not entry.get("_initpose_pending", False):
+            entry["_last_trusted_position"] = dict(entry["position"])
+            if location == 0:
+                # 측위 정상(Location=0)인 마지막 표본 — 상실 확정은 Location≠0 이 3초 넘게 이어진 뒤라
+                # 그 사이 좌표는 이미 튀었을 수 있다(B3 실측 10-19). 복구 뒤 점프 비교의 기준이다.
+                entry["_last_loc_ok_position"] = dict(entry["position"])
+
+
+def get_trusted_position(robot_id: int) -> dict | None:
+    """마지막 '신뢰' 위치(미확정 직전, 재시작 시 DB 복원값). 없으면 None.
+
+    위치 급변 가드가 재시작 직후(라이브 prev 없음) 비교 기준으로 사용한다.
+    """
+    with _lock:
+        entry = _runtime.get(robot_id)
+        if not entry:
+            return None
+        tp = entry.get("_last_trusted_position")
+        return dict(tp) if tp else None
+
+
+def update_nav(robot_id: int, arrived: bool, last_state, timestamp: float) -> None:
+    """네비게이션 상태 갱신."""
+    with _lock:
+        entry = _runtime.get(robot_id)
+        if not entry:
+            return
+        entry["nav"] = {
+            "arrived": arrived,
+            "last_state": last_state,
+            "timestamp": timestamp,
+        }
+
+
+# ── 조회 ──────────────────────────────────────────────
+
+def _derive_network(last_heartbeat: float, last_sleep=None) -> str:
+    """last_heartbeat 기준 네트워크 상태 판정 (임계는 ONLINE_MAX_AGE/ERROR_MAX_AGE).
+    - 한 번도 heartbeat 없으면 → "-" (미확인)
+    - ONLINE_MAX_AGE 이내 → "Online"
+    - ONLINE_MAX_AGE ~ ERROR_MAX_AGE(전환 구간) → 마지막 Sleep 으로 구별:
+        · Sleep != 0 (전원 내려감/절전) → "Online" 유지 → 이후 Offline (Error 표시 없음)
+        · Sleep == 0 (켜져 있었는데 끊김) → "Error" (=통신 끊김)
+    - ERROR_MAX_AGE 초과 → "Offline"
+
+    ⚠️ 전원 off vs 통신 끊김 구별은 로봇이 끊기기 직전 보낸 Sleep 값에 의존한다.
+       정상 전원 off(버튼 → 절전 Sleep!=0 보고 → 종료)면 마지막 Sleep!=0 이라 구별되지만,
+       Sleep=0 상태에서 급작스런 전원 차단/네트워크 두절은 둘 다 Sleep==0 이라 '끊김'으로 보인다.
+    """
+    if last_heartbeat == 0:
+        return "-"
+    age = time.time() - last_heartbeat
+    if age <= ONLINE_MAX_AGE:
+        return "Online"
+    if age <= ERROR_MAX_AGE:
+        # 전환 구간: 전원 내려감(Sleep!=0)이면 '끊김(Error)' 대신 직전 상태(Online) 유지
+        if last_sleep is not None and last_sleep != 0:
+            return "Online"
+        return "Error"
+    return "Offline"
+
+
+def _derive_power(
+    basic_status: dict | None,
+    battery: dict | None = None,
+    network: str | None = None,
+) -> str:
+    """전원 상태 도출 — Sleep=0이 현재 수신되고 있을 때만 On, 그 외 Off.
+
+    규칙:
+    - basic_status도 battery도 전혀 없음 → "-" (미확인)
+    - 네트워크가 확정 Offline → "Off" (Sleep 값이 있어도 stale이므로 무시)
+    - Sleep == 0 → "On" (로봇 켜져 있음)
+    - 그 외 (Sleep != 0 또는 Sleep 없음) → "Off"
+    """
+    if not basic_status and not battery:
+        return "-"
+    # 네트워크가 끊어진 지 오래되면(Offline 확정) Sleep 값은 stale이므로 Off
+    if network == "Offline":
+        return "Off"
+    sleep_val = (basic_status or {}).get("Sleep")
+    return "On" if sleep_val == 0 else "Off"
+
+
+def get_all_statuses() -> list[dict]:
+    """전체 로봇 런타임 상태를 API 응답 형태로 반환."""
+    with _lock:
+        return [_build_status(entry) for entry in _runtime.values()]
+
+
+_CHARGE_STATE_LABEL = {
+    0: "대기",
+    1: "도크로 이동",
+    2: "충전 중",
+    3: "도크에서 나가기",
+    4: "로봇 오류",
+    5: "도크에 있지만 전류가 흐르지 않음",
+}
+
+_CHARGE_ERROR_MSG = {
+    0:    "재설정 작업/초기화",
+    1:    "작전 성공",
+    4098: "도킹 대상 지점 검색 중 시간 초과 발생(반사판 가림 시간 초과)",
+    4099: "반사경 위치 지정 알고리즘을 시작하는 데 실패했습니다",
+    4100: "도킹 목표 지점을 찾지 못했습니다(반사판 목표 지점 없음)",
+    4101: "도킹 타임아웃",
+    4102: "도킹 해제 시간 초과",
+    4103: "충전 도크에서 전류가 흐르지 않습니다",
+    4104: "소프트 비상 정지 작동됨",
+}
+
+
+def _is_at_dock(is_charging: bool, charge_st: int, is_navigating: bool, docked_idle: bool) -> bool:
+    """로봇이 충전소 도킹을 점유 중인지 판정 — '충전 해제(언도킹)' 버튼 노출 조건.
+
+    = 자율 충전 중 OR 완충 후 충전소 위치 대기. (그 외는 '충전소 이동')
+    - **주행 중이면 도크 점유가 아니다** → False.
+    - 충전 중이거나 도킹 진행/도크 물림(state 1=도크로 이동, 2=충전 중, 5=도크·전류없음=완충 트리클)면 점유.
+    - 완충 후 대기(비충전·비주행)는 `docked_idle`(충전 이력 추적, update_status)로 판정.
+      위치(좌표) 기반은 부정확 + '자율주행 후 충전소 근처 정지' 오판이 있어 쓰지 않는다.
+    """
+    if is_navigating:
+        return False
+    if is_charging or charge_st in (1, 2, 5):
+        return True
+    return docked_idle
+
+
+def _build_status(entry: dict) -> dict:
+    """내부 엔트리를 API 응답 형태로 변환."""
+    basic_status = entry.get("basic_status") or {}
+    sleep_val = basic_status.get("Sleep")
+    # 마지막 Sleep 을 함께 넘겨 전환 구간에서 전원off(Sleep!=0) vs 통신끊김(Sleep==0) 구별
+    network = _derive_network(entry["last_heartbeat"], sleep_val)
+    battery = entry["battery"]
+    power = _derive_power(basic_status, battery, network)
+    power_mgmt = basic_status.get("PowerManagement")
+    motion_state = basic_status.get("MotionState")
+    cs = entry.get("charge_state", {})
+    charge_st = cs.get("state", 0)
+    charge_err = cs.get("error_code", 0)
+    is_nav = _check_navigating(entry["robot_id"])
+    return {
+        "robot_id": entry["robot_id"],
+        "robot_name": entry["robot_name"],
+        "robot_type": entry["robot_type"],
+        "battery": battery,
+        "network": network,
+        "power": power,
+        "sleep": sleep_val,
+        # 0=regular(배터리 2개) / 1=single battery — 로봇이 켜진 상태(Sleep=0)일 때만 유효
+        "power_management": power_mgmt if sleep_val == 0 else None,
+        # 1=Stand, 4=Sit (로봇 자세)
+        "motion_state": motion_state,
+        # 현재 보행 — Standard: 0x1001 기본/0x1002 고장애물/0x1003 계단/0xf001 자세, Agile: 0x300X
+        "gait": entry.get("gait"),
+        "is_charging": entry.get("_is_charging", False),
+        # 도킹 점유 여부 — 충전 중 또는 완충 후 충전소 위치 대기(비주행)일 때 True.
+        # 관제 UI가 '충전 해제(언도킹)' 버튼 노출 조건으로 사용. 주행 중이면 False.
+        "at_dock": _is_at_dock(entry.get("_is_charging", False), charge_st, is_nav,
+                               entry.get("_docked_idle", False)),
+        "charge_state": charge_st,
+        "charge_state_label": _CHARGE_STATE_LABEL.get(charge_st, f"알 수 없음({charge_st})"),
+        "charge_error_code": charge_err,
+        "charge_error_msg": _CHARGE_ERROR_MSG.get(charge_err, f"알 수 없는 오류(0x{charge_err:04X})") if charge_st == 4 else None,
+        "is_navigating": is_nav,
+        # 충전소로 가는 중(도킹 전) — 화면이 '충전 중'과 구분해 '충전소로 이동'으로 보인다
+        "returning_to_charge": is_nav and _charge_on_arrival(),
+        # 배터리 부족 충전 후 이어 가기 — 운영자 확인을 기다리는 요청(없으면 None)
+        "battery_resume": _battery_resume(entry["robot_id"]),
+        "current_floor_id": entry.get("current_floor_id"),
+        "current_map_id": entry.get("current_map_id"),
+        # 위치 미초기화(자동 init_pose 수렴 실패) — True 면 위치 좌표 신뢰불가·자율주행 보류
+        "initpose_pending": bool(entry.get("_initpose_pending", False)),
+        "initpose_reason": entry.get("_initpose_reason", "") or "",
+        "floor_transit": time.time() < (entry.get("_floor_transit_until") or 0.0),
+        "timestamp": entry["last_heartbeat"],
+        "position": entry["position"],
+        # 마지막 '신뢰' 위치(미확정 직전). 미확정 동안 맵 마커를 발산 좌표 대신 여기에 고정하기 위함.
+        "trusted_position": entry.get("_last_trusted_position"),
+    }
+
+
+def _battery_resume(robot_id: int) -> dict | None:
+    try:
+        from app.robot_control.battery_resume import current
+        return current(robot_id)
+    except Exception:
+        return None
+
+
+def _charge_on_arrival() -> bool:
+    try:
+        from app.navigation import send_move
+        return bool(send_move.charge_on_arrival)
+    except Exception:
+        return False
+
+
+def _check_navigating(robot_id: int) -> bool:
+    """현재 네비게이션 진행 중 여부.
+    1순위: 메모리 (이 서버에서 시작한 작업)
+    2순위: DB IsWorking (다른 서버에서 시작한 작업)
+    """
+    try:
+        from app.navigation.send_move import is_nav_active
+        if is_nav_active():
+            return True
+    except Exception:
+        pass
+    try:
+        from app.database.database import SessionLocal
+        from app.database.models import RobotLastStatus
+        db = SessionLocal()
+        try:
+            row = db.query(RobotLastStatus.IsWorking).filter(
+                RobotLastStatus.RobotId == robot_id
+            ).first()
+            return bool(row and row.IsWorking)
+        finally:
+            db.close()
+    except Exception:
+        return False
+
+
+def is_robot_navigating(robot_id: int) -> bool:
+    """로봇이 자율 주행/작업 중인지 (강제 개입 가드용).
+
+    status 의 is_navigating 과 동일 판정(메모리 nav + DB IsWorking).
+    강제 층 지정 등 파괴적 개입 전 '작업 중이면 거부'에 쓴다.
+    """
+    return _check_navigating(robot_id)
+
+
+def _check_charging(battery: dict) -> bool:
+    """배터리 딕셔너리에서 충전 여부 판정.
+    - 일반 로봇: Charging 키
+    - QUADRUPED: chargeLeft 또는 chargeRight 중 하나라도 True
+    """
+    if battery.get("Charging", False):
+        return True
+    if battery.get("chargeLeft", False) or battery.get("chargeRight", False):
+        return True
+    return False
+
+
+# ── 유틸 ──────────────────────────────────────────────
+
+def get_first_robot_id() -> Optional[int]:
+    """등록된 첫 번째 로봇 ID 반환 (단일 로봇 환경 호환용)."""
+    with _lock:
+        if not _runtime:
+            return None
+        return next(iter(_runtime))
+
+
+def get_robot_id_by_ip(ip: str) -> Optional[int]:
+    """RobotIP가 일치하는 로봇 ID 반환."""
+    with _lock:
+        for rid, entry in _runtime.items():
+            if entry.get("robot_ip") == ip:
+                return rid
+        return None
+
+
+def get_business_id(robot_id: int) -> Optional[int]:
+    """로봇의 사업장 ID 반환."""
+    with _lock:
+        entry = _runtime.get(robot_id)
+        if not entry:
+            return None
+        return entry.get("business_id")
+
+
+def is_charging(robot_id: int) -> bool:
+    """로봇이 충전 중인지 확인."""
+    with _lock:
+        entry = _runtime.get(robot_id)
+        if not entry:
+            return False
+        return entry.get("_is_charging", False)
+
+
+def is_docked(robot_id: int) -> bool:
+    """로봇이 충전소 도킹을 점유 중인지 (충전 중 또는 도크 물림).
+
+    is_charging(배터리 충전 플래그) 또는 charge_state ∈ {1=도크로 이동, 2=충전 중,
+    5=도크에 있지만 전류 없음(완충 트리클 off)}. state 5 도 물리적으론 도크에 있는 상태다.
+    ⚠️ charge_state 는 로봇 측 relay_charge.py 가 실행돼야 들어온다(미실행 시 0 고정).
+       따라서 이 판정이 완충(state 5)까지 잡으려면 로봇에서 relay_charge.py 가 상시 실행돼야 한다.
+    """
+    with _lock:
+        entry = _runtime.get(robot_id)
+        if not entry:
+            return False
+        if entry.get("_is_charging", False):
+            return True
+        return (entry.get("charge_state") or {}).get("state", 0) in (1, 2, 5)
+
+
+def get_charge_state(robot_id: int) -> int:
+    """로봇의 현재 충전 상태머신 state 반환.
+    0=대기, 1=도크로 이동, 2=충전 중, 3=도크에서 나가기, 4=오류, 5=도크·전류없음.
+    """
+    with _lock:
+        entry = _runtime.get(robot_id)
+        if not entry:
+            return 0
+        return (entry.get("charge_state") or {}).get("state", 0)
+
+
+def get_motion_state(robot_id: int):
+    """로봇 자세(MotionState) 반환. 1=Stand(서 있음), 4=Sit(앉음). 미수신이면 None."""
+    with _lock:
+        entry = _runtime.get(robot_id)
+        if not entry:
+            return None
+        return (entry.get("basic_status") or {}).get("MotionState")
+
+
+def get_gait(robot_id: int):
+    """현재 보행 코드(0x1001 기본, 0x3002 내비 등). 미수신이면 None."""
+    with _lock:
+        entry = _runtime.get(robot_id)
+        return entry.get("gait") if entry else None
+
+
+def clear_charge_state(robot_id: int) -> None:
+    """충전 상태를 능동적으로 '대기(0)'로 클리어.
+
+    언도킹(도킹 이탈) 확정 시점에 호출한다. 로봇 ROS2 `/CHARGE_STATUS` 전환
+    통보가 누락돼도 `is_charging`/`charge_state` 가 stale(충전 중)로 고정되지
+    않도록 백엔드가 능동적으로 떨어뜨리는 fail-safe.
+    """
+    with _lock:
+        entry = _runtime.get(robot_id)
+        if not entry:
+            return
+        entry["_is_charging"] = False
+        entry["_charging_drop_count"] = 0
+        entry["_docked_idle"] = False  # 언도킹 = 도크 떠남 → 도크 점유 해제
+        cs = dict(entry.get("charge_state") or {})
+        cs["state"] = 0
+        entry["charge_state"] = cs
+
+
+def update_floor(robot_id: int, floor_id: int, map_id: int = None) -> None:
+    """로봇의 현재 층/맵 변경."""
+    with _lock:
+        entry = _runtime.get(robot_id)
+        if entry:
+            entry["current_floor_id"] = floor_id
+            if map_id is not None:
+                entry["current_map_id"] = map_id
+
+
+# ── init_pose 미초기화(localization 신뢰불가) 플래그 ──────
+# 전원 on 자동 init_pose 가 끝내 수렴에 실패하면(escalation) True 로 세팅된다.
+# True 인 동안 해당 로봇의 위치 좌표는 신뢰할 수 없으므로 자율주행을 보류한다(안전 가드).
+# 수동/자동 init_pose 가 수렴 성공하면 False 로 해제된다.
+
+# 미확정 → 확정(측위 복구)을 알릴 곳. fn(robot_id, 마지막 정상 측위 위치, 복구 시점 위치, info) —
+# info = {lost_sec, map_changed, reset}. 노드망 재계산(send_move)이 쓴다.
+_recovery_listeners: list = []
+
+
+def add_recovery_listener(fn) -> None:
+    if fn not in _recovery_listeners:
+        _recovery_listeners.append(fn)
+
+
+def set_initpose_pending(robot_id: int, pending: bool, reason: str = "",
+                         by_localization: bool = False) -> None:
+    """init_pose 미초기화 상태 set/clear. 자율주행 안전 가드의 기준.
+
+    by_localization: 로봇 측위가 스스로 정상으로 돌아와 푸는 경우(polling). 그 밖의 해제(운영자 확정·
+    자동 init_pose·엘베 전이)는 위치를 새로 심은 것이라 복구 알림에서 '재설정 동반' 으로 본다.
+    """
+    recovered = None
+    with _lock:
+        entry = _runtime.get(robot_id)
+        if not entry:
+            return
+        was_pending = bool(entry.get("_initpose_pending", False))
+        entry["_initpose_pending"] = bool(pending)
+        entry["_initpose_reason"] = reason if pending else ""
+        if pending and not was_pending:
+            entry["_pending_since"] = time.time()
+            entry["_pending_map_id"] = entry.get("current_map_id")
+        if not pending:
+            # 위치가 확정되면 층 이동(사전 맵 전환)도 끝난 것이다
+            entry["_floor_transit_until"] = 0.0
+            if was_pending:
+                before = entry.get("_last_loc_ok_position") or entry.get("_last_trusted_position")
+                after = entry.get("position")
+                info = {
+                    "lost_sec": time.time() - float(entry.get("_pending_since") or time.time()),
+                    "map_changed": entry.get("_pending_map_id") != entry.get("current_map_id"),
+                    "reset": not by_localization,
+                }
+                recovered = (dict(before) if before else None, dict(after) if after else None, info)
+    if recovered is not None:
+        for fn in list(_recovery_listeners):
+            try:
+                fn(robot_id, *recovered)
+            except Exception as e:  # noqa: BLE001 — 알림 실패가 위치 확정을 막으면 안 된다
+                print(f"[RUNTIME] 측위 복구 알림 실패: {e}")
+
+
+# ── 층 이동 중(사전 맵 전환) ─────────────────────────
+# 엘리베이터를 타기 전에 도착층 맵으로 미리 바꿔 두면, 이동하는 동안 로봇은 다른 층 맵으로
+# 측위하므로 상실·급변이 정상이다. 그동안 상실 알림·전원 on 오탐을 억제하고 자율주행만 막는다.
+# 도착층에서 위치가 확정되면(set_initpose_pending False) 끝나고, 확정이 없으면 상한 뒤 억제만 풀린다.
+FLOOR_TRANSIT_REASON = "층 이동 중(사전 맵 전환)"
+FLOOR_TRANSIT_MAX_SEC = 15 * 60
+
+
+def begin_floor_transit(robot_id: int) -> None:
+    with _lock:
+        entry = _runtime.get(robot_id)
+        if not entry:
+            return
+        entry["_floor_transit_start"] = time.time()
+        entry["_initpose_pending"] = True
+        entry["_initpose_reason"] = FLOOR_TRANSIT_REASON
+        entry["_floor_transit_until"] = time.time() + FLOOR_TRANSIT_MAX_SEC
+
+
+def end_floor_transit(robot_id: int) -> None:
+    """억제만 끝낸다. 미확정은 그대로 둔다(위치는 여전히 확인 전)."""
+    with _lock:
+        entry = _runtime.get(robot_id)
+        if entry:
+            entry["_floor_transit_until"] = 0.0
+
+
+def note_initpose_injected(robot_id: int) -> None:
+    """위치 주입이 로봇에 전달됐다(receiver 응답 ok). 층 이동 뒤 '완료' 판정에 쓴다."""
+    with _lock:
+        entry = _runtime.get(robot_id)
+        if entry:
+            entry["_inject_at"] = time.time()
+
+
+def injected_since_floor_transit(robot_id: int) -> bool:
+    """층 이동(사전 맵 전환)을 시작한 뒤 위치 주입이 로봇에 한 번이라도 전달됐는지.
+
+    10-30 11:58 1F 도착: 엘리베이터 입구 시드가 TCP·UDP 모두 시간 초과로 로봇에 안 갔는데, 로봇은 Location=0 을
+    보내 '완료'가 통과했고 옛 층 좌표로 확정됐다. 주입 전달 전에는 확정하지 않는다.
+    """
+    with _lock:
+        entry = _runtime.get(robot_id) or {}
+        return float(entry.get("_inject_at") or 0.0) >= float(entry.get("_floor_transit_start") or 0.0) > 0.0
+
+
+def is_floor_transit(robot_id: int) -> bool:
+    if robot_id is None:
+        return False
+    with _lock:
+        entry = _runtime.get(robot_id)
+        return bool(entry) and time.time() < (entry.get("_floor_transit_until") or 0.0)
+
+
+# 로봇 측위 상태를 믿을 수 있는 최대 경과 시간. 위치 폴링 주기(2초)의 여유분.
+_LOCATION_FRESH_SEC = 6.0
+
+
+def get_localization_state(robot_id: int) -> int | None:
+    """로봇이 보고한 측위 상태(ASDU 1007/2 Location). 0=정상, 그 외=상실/이상.
+
+    값이 없거나(구버전 receiver) 오래됐으면 None — '모름'이다.
+    """
+    if robot_id is None:
+        return None
+    with _lock:
+        entry = _runtime.get(robot_id)
+        pos = (entry or {}).get("position") or {}
+    loc = pos.get("location")
+    ts = pos.get("timestamp", 0) or 0
+    if loc is None or not ts or time.time() - ts > _LOCATION_FRESH_SEC:
+        return None
+    return int(loc)
+
+
+# 로봇이 측위 상실을 보고해서 미확정으로 돌린 경우의 사유. 로봇이 스스로 회복하면
+# 이 사유로 켜진 미확정만 자동 해제한다(층 전환·전원 on 등 다른 사유는 건드리지 않는다).
+LOCALIZATION_LOST_REASON = "측위 상실(로봇 보고)"
+
+
+def get_initpose_reason(robot_id: int) -> str:
+    """미확정 사유. 미확정이 아니면 빈 문자열."""
+    if robot_id is None:
+        return ""
+    with _lock:
+        entry = _runtime.get(robot_id)
+        return (entry or {}).get("_initpose_reason", "") or ""
+
+
+def is_initpose_pending(robot_id: int) -> bool:
+    """해당 로봇의 위치가 미초기화(신뢰불가) 상태인지."""
+    if robot_id is None:
+        return False
+    with _lock:
+        entry = _runtime.get(robot_id)
+        if not entry:
+            return False
+        return bool(entry.get("_initpose_pending", False))
+
+
+def get_current_map_id(robot_id: int):
+    """해당 로봇의 현재 활성 맵 id(런타임 기준). 없으면 None.
+
+    activate/switch_active_map 이 update_floor 로 갱신하므로, 다층 경로 실행 시
+    '다음 웨이포인트가 다른 맵인가' 판정의 기준으로 쓴다.
+    """
+    if robot_id is None:
+        return None
+    with _lock:
+        entry = _runtime.get(robot_id)
+        if not entry:
+            return None
+        return entry.get("current_map_id")
+
+
+def mark_manual_confirm(robot_id: int) -> None:
+    """운영자 수동 확정 시점을 기록 — 직후 위치 급변 가드의 재-미확정 트리거를 유예한다.
+
+    재조정 직후 로봇 localization 이 시드에서 실제 위치로 수렴하며 좌표가 크게 튈 수 있는데,
+    이를 위치 급변(→미확정 재설정)으로 오인하지 않도록 잠깐 가드를 쉬게 한다.
+    """
+    with _lock:
+        entry = _runtime.get(robot_id)
+        if entry:
+            entry["_manual_confirm_ts"] = time.time()
+
+
+def in_manual_confirm_grace(robot_id: int, grace_sec: float = 12.0) -> bool:
+    """수동 확정 직후 유예 구간(위치 급변 가드 억제)인지."""
+    if robot_id is None:
+        return False
+    with _lock:
+        entry = _runtime.get(robot_id)
+        if not entry:
+            return False
+        ts = entry.get("_manual_confirm_ts", 0) or 0
+        return ts > 0 and (time.time() - ts) < grace_sec
+
+
+def get_position(robot_id: int) -> dict:
+    """단일 로봇 위치 조회."""
+    with _lock:
+        entry = _runtime.get(robot_id)
+        if not entry:
+            return {"x": 0.0, "y": 0.0, "yaw": 0.0, "timestamp": 0}
+        return {
+            "robot_id": entry["robot_id"],
+            "robot_name": entry["robot_name"],
+            "initpose_pending": bool(entry.get("_initpose_pending", False)),
+            **entry["position"],
+        }
+
+
+def get_network(robot_id: int) -> str:
+    """단일 로봇 통신 상태 — "Online" | "Error" | "Offline" | "-"(미확인)."""
+    with _lock:
+        entry = _runtime.get(robot_id)
+        if not entry:
+            return "-"
+        sleep_val = (entry.get("basic_status") or {}).get("Sleep")
+        return _derive_network(entry["last_heartbeat"], sleep_val)
+
+
+def get_nav(robot_id: int) -> dict:
+    """단일 로봇 네비게이션 상태 조회."""
+    with _lock:
+        entry = _runtime.get(robot_id)
+        if not entry:
+            return {"arrived": False, "last_state": None, "timestamp": 0}
+        return dict(entry["nav"])
+
+
+def add_or_update_robot(robot) -> None:
+    """DB의 RobotInfo 객체로 런타임 엔트리 추가 또는 갱신 (서버 재시작 불필요)."""
+    limit = int(robot.LimitBattery) if robot.LimitBattery is not None else 30
+    with _lock:
+        existing = _runtime.get(robot.id)
+        if existing:
+            existing["robot_name"] = robot.RobotName or ""
+            existing["robot_type"] = robot.RobotType or ""
+            existing["robot_ip"] = robot.RobotIP
+            existing["robot_port"] = robot.RobotPort or 30000
+            existing["limit_battery"] = limit
+        else:
+            _runtime[robot.id] = {
+                "robot_id": robot.id,
+                "robot_name": robot.RobotName or "",
+                "robot_type": robot.RobotType or "",
+                "robot_ip": robot.RobotIP,
+                "robot_port": robot.RobotPort or 30000,
+                "current_floor_id": robot.CurrentFloorId,
+                "current_map_id": getattr(robot, "CurrentMapId", None),
+                "limit_battery": limit,
+                "position": {"x": 0.0, "y": 0.0, "yaw": 0.0, "timestamp": 0},
+                "battery": {},
+                "charge_state": {"state": 0, "error_code": 0, "timestamp": 0},
+                "device_temp": {},
+                "basic_status": {},
+                "abnormal_codes": set(),
+                "last_heartbeat": 0,
+                "nav": {"arrived": False, "last_state": None, "timestamp": 0},
+            }
+        print(f"[OK] 런타임 갱신: robot_id={robot.id}, name={robot.RobotName}")

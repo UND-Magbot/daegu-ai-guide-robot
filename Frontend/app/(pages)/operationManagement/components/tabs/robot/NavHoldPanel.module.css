@@ -1,0 +1,76 @@
+/* 이동 멈춤 — 로봇 상세 '현재 작업' 카드 안 (Modal.module.css detailTask* 와 같은 크기·색) */
+.panel {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.line {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.chip {
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  padding: 2px 10px;
+  border-radius: 10px;
+  color: var(--color-warning);
+  background: rgba(255, 198, 53, 0.15);
+}
+
+.reason {
+  font-size: var(--font-size-sm);
+  color: var(--color-warning);
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.btnPrimary,
+.btnSecondary,
+.btnGhost {
+  height: 30px;
+  padding: 0 14px;
+  border-radius: 6px;
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.btnPrimary {
+  border: 1px solid rgba(0, 176, 238, 0.5);
+  background: var(--color-info-selected);
+  color: var(--text-primary);
+}
+
+.btnSecondary {
+  border: 1px solid var(--border-subtle);
+  background: var(--surface-5);
+  color: var(--text-primary);
+}
+
+.btnGhost {
+  border: 1px solid var(--border-default);
+  background: transparent;
+  color: var(--text-tertiary);
+}
+
+.btnPrimary:disabled,
+.btnSecondary:disabled,
+.btnGhost:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.auto {
+  font-size: var(--font-size-sm);
+  color: var(--color-warning);
+}

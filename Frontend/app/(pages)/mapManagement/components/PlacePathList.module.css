@@ -1,0 +1,789 @@
+.bottomPosition {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 14px;
+}
+
+.placePagination {
+  display: flex;
+  justify-content: center;
+  margin-top: auto;
+  padding-top: 10px;
+}
+
+.robotWorkBox {
+  display: flex;
+  gap: 8px;
+}
+
+.floorBox,
+.robotBox {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  z-index: 10;
+  padding: 2px 10px;
+  line-height: 24px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  text-align: center;
+  background: rgba(0, 0, 0, 0.4);
+  backdrop-filter: blur(6px);
+  font-size: var(--font-size-sm);
+  color: var(--text-primary);
+}
+
+.RobotStatusList h2,
+.cameraMapView h2,
+.robotPlaceBox h2,
+.placeTopBar h2 {
+  font-weight: 600;
+  font-size: var(--font-size-xl);
+  margin: 0;
+  color: var(--text-accent);
+  letter-spacing: -0.02em;
+}
+
+.robotPlaceBox {
+  display: flex;
+  align-items: center; /* L-06: baseline → center, 헤더 액션 버튼이 텍스트 baseline에 걸리던 문제 해소 */
+  gap: 10px;
+  margin-bottom: 15px;
+  height: 40px;
+}
+
+.placeHintInline {
+  font-size: var(--font-size-sm);
+  color: var(--text-tertiary);
+  font-weight: 400;
+}
+
+.robotPlaceBox h2 {
+  margin-bottom: 0; /* L-06: 고정 height(40px)와 충돌하던 중복 margin 제거 */
+}
+
+.rightHeaderActions {
+  margin-left: auto;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.monitoringPlaceholder {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px dashed var(--border-subtle);
+  border-radius: 12px;
+  color: var(--text-muted);
+  font-size: var(--font-size-md);
+}
+
+.monitoringLoading {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  border: 1px dashed var(--border-subtle);
+  border-radius: 12px;
+  color: var(--text-tertiary);
+  font-size: var(--font-size-md);
+}
+
+.monitoringLoadingSpinner {
+  width: 40px;
+  height: 40px;
+  border: 4px solid var(--surface-4);
+  border-top-color: var(--color-info);
+  border-radius: 50%;
+  animation: monitoringSpin 0.8s linear infinite;
+}
+
+@keyframes monitoringSpin {
+  to { transform: rotate(360deg); }
+}
+
+.placeWrap {
+  width: 100%;
+  flex: 1;
+  min-height: var(--page-body-min-height);
+  background: var(--surface-3);
+  border-radius: 10px 0 10px 10px;
+  padding: 20px;
+
+  display: flex;
+  justify-content: space-between;
+  gap: 24px;
+}
+
+.placeLeft {
+  flex: 1 1 50%;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.placeRight {
+  flex: 1 1 50%;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px; /* 좌측 placeLeft(gap:14)와 동일하게 → 표/지도 시작점 정렬 */
+}
+
+.placeTopBar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  /* 좌/우 헤더 하단 간격을 동일하게(=우측 robotPlaceBox margin-bottom 15 + 패널 gap 14)
+     맞춰 좌측 표 시작점과 우측 지도 시작점을 정렬한다. */
+  margin-bottom: 15px;
+  height: 40px;
+}
+
+.placeFilters {
+  display: flex;
+  gap: 10px;
+}
+
+/* 장소 목록 (4칸): 로봇명 / 층별 / 장소명 / 좌표(X,Y,D) */
+/* PL-01: 경로 표(pathTable)와 동일하게 최소 폭 부여 → 좁아져도 가로 스크롤로 좌표 보존 */
+.status.placeTable { min-width: 580px; }
+.status.placeTableDelete { min-width: 620px; }
+
+.status.placeTable th:nth-child(1),
+.status.placeTable td:nth-child(1) { width: 22%; }
+.status.placeTable th:nth-child(2),
+.status.placeTable td:nth-child(2) { width: 10%; }
+.status.placeTable th:nth-child(3),
+.status.placeTable td:nth-child(3) { width: 28%; }
+.status.placeTable th:nth-child(4),
+.status.placeTable td:nth-child(4) { width: 40%; }
+
+/* 장소 목록 삭제 모드 (5칸): ☑ / 로봇명 / 층별 / 장소명 / 좌표 */
+.status.placeTableDelete th:nth-child(1),
+.status.placeTableDelete td:nth-child(1) { width: 5%; }
+.status.placeTableDelete th:nth-child(2),
+.status.placeTableDelete td:nth-child(2) { width: 20%; }
+.status.placeTableDelete th:nth-child(3),
+.status.placeTableDelete td:nth-child(3) { width: 10%; }
+.status.placeTableDelete th:nth-child(4),
+.status.placeTableDelete td:nth-child(4) { width: 25%; }
+.status.placeTableDelete th:nth-child(5),
+.status.placeTableDelete td:nth-child(5) { width: 40%; }
+
+.placeMapCard {
+  width: 100%;
+  max-width: 928px;
+  aspect-ratio: 16 / 9;
+
+  border-radius: 18px;
+
+  background: var(--surface-2);
+
+  overflow: hidden;
+  position: relative;
+
+  box-sizing: border-box;
+  flex-shrink: 0;
+}
+
+.placeListBox {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: auto; /* PL-01: 패널이 좁아질 때 좌표 컬럼이 잘리지 않도록 가로 스크롤 */
+}
+
+.placeTable {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: center;
+}
+
+.placeTable thead tr {
+  background: var(--surface-1);
+}
+
+.placeTable th,
+.placeTable td {
+  padding: 8px 4px;
+  height: 50px;
+}
+
+.placeTable th {
+  position: relative;
+  color: var(--text-tertiary);
+  font-size: var(--font-size-lg);
+  font-weight: 600;
+}
+
+.placeTable tbody td {
+  color: var(--text-secondary);
+  font-size: var(--font-size-md);
+}
+
+.placeTable thead th:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  right: 0;
+  transform: translateY(-50%);
+  width: 1px;
+  height: 20px;
+  background: var(--border-subtle);
+}
+
+.placeTable tr:nth-child(2n) {
+  background-color: rgba(51, 56, 76, 0.8);
+}
+
+.pathWrap {
+  width: 100%;
+  flex: 1;
+  min-height: var(--page-body-min-height);
+  background: var(--surface-3);
+  border-radius: 10px 0 10px 10px;
+  padding: 20px;
+
+  display: flex;
+  justify-content: space-between;
+  gap: 24px;
+}
+
+.pathLeft {
+  flex: 1 1 60%;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.pathRight {
+  flex: 1 1 40%;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.pathTopBar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  height: 40px;
+}
+
+.pathTopBar h2 {
+  font-weight: 600;
+  font-size: var(--font-size-xl);
+  margin: 0;
+  color: var(--text-accent);
+  letter-spacing: -0.02em;
+}
+
+.pathFilters {
+  display: flex;
+  gap: 10px;
+}
+
+.pathListBox {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: auto;
+}
+
+.pathListBox::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.pathListBox::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.pathListBox::-webkit-scrollbar-thumb {
+  background: var(--surface-5);
+  border-radius: 3px;
+}
+
+.pathListBox::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
+}
+
+.pathListBox::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+.pathPagination {
+  display: flex;
+  justify-content: center;
+  margin-top: auto;
+  padding-top: 10px;
+}
+
+.pathBottomBar {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 14px;
+}
+
+.pathPrimaryBtn {
+  width: 120px;
+  height: 35px;
+  border-radius: 8px;
+  padding: 8px 14px;
+
+  background: var(--color-info-bg); /* D-02: 모달 주 버튼(--color-info-bg)과 통일 */
+  color: var(--text-primary);
+
+  font-size: var(--font-size-base);
+  font-weight: 600;
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.2s ease, transform 0.1s ease;
+}
+
+.pathPrimaryBtn:hover {
+  background: var(--color-info-bg);
+}
+
+.pathPrimaryBtn:active {
+  transform: scale(0.97);
+}
+
+.pathPrimaryBtn img {
+  width: 11px;
+  height: 11px;
+}
+
+/* 경로 목록 (4칸): 로봇명 / 작업유형 / 경로명 / 경로순서 */
+.status.pathTable { min-width: 580px; }
+.status.pathTable th:nth-child(1),
+.status.pathTable td:nth-child(1) { width: 20%; }
+.status.pathTable th:nth-child(2),
+.status.pathTable td:nth-child(2) { width: 12%; }
+.status.pathTable th:nth-child(3),
+.status.pathTable td:nth-child(3) { width: 20%; }
+.status.pathTable th:nth-child(4),
+.status.pathTable td:nth-child(4) { width: 48%; }
+
+/* 경로 목록 삭제 모드 (5칸): ☑ / 로봇명 / 작업유형 / 경로명 / 경로순서 */
+.status.pathTableDelete { min-width: 620px; }
+.status.pathTableDelete th:nth-child(1),
+.status.pathTableDelete td:nth-child(1) { width: 5%; }
+.status.pathTableDelete th:nth-child(2),
+.status.pathTableDelete td:nth-child(2) { width: 17%; }
+.status.pathTableDelete th:nth-child(3),
+.status.pathTableDelete td:nth-child(3) { width: 12%; }
+.status.pathTableDelete th:nth-child(4),
+.status.pathTableDelete td:nth-child(4) { width: 18%; }
+.status.pathTableDelete th:nth-child(5),
+.status.pathTableDelete td:nth-child(5) { width: 48%; }
+
+.pathOrderCell {
+  text-align: left;
+  padding: 0 10px !important;
+}
+
+.pathOrderText {
+  width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.status tbody tr.rowInactive td {
+  opacity: 0.4;
+}
+
+.status tbody tr.rowInactive:hover td {
+  opacity: 0.55;
+}
+
+.pathLoadingOverlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.35);
+  border-radius: 10px;
+  z-index: 5;
+}
+
+.pathSpinner {
+  width: 32px;
+  height: 32px;
+  border: 3px solid var(--border-subtle);
+  border-top-color: var(--color-accent-light);
+  border-radius: 50%;
+  animation: pathSpin 0.8s linear infinite;
+}
+
+.pathEmptyWrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 50px 0;
+}
+
+.pathEmptyIcon {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: var(--surface-5);
+  color: var(--text-muted);
+  font-size: var(--font-size-lg);
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.pathEmptyTitle {
+  font-size: var(--font-size-md);
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+.pathEmptyDesc {
+  font-size: var(--font-size-sm);
+  color: var(--text-muted);
+}
+
+.pathMapCard {
+  width: 100%;
+  max-width: 928px;
+  aspect-ratio: 16 / 9;
+  border-radius: 18px;
+  background: var(--surface-2);
+  overflow: hidden;
+  position: relative;
+  box-sizing: border-box;
+  flex-shrink: 0;
+}
+
+/* L-01: PathMapView가 참조하나 미정의였던 클래스 — 줌 컨트롤을 맵 우하단에 오버레이 배치.
+   부모 .pathMapCard 가 position:relative 이므로 이 기준으로 절대배치된다. */
+.zoomPosition {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  z-index: 5;
+}
+
+/* L-05/D-06: 다중층 스위처 — 단일층 .floorBox 와 동일하게 지도 내부 좌상단 오버레이 + 동일 칩 디자인.
+   (일반 흐름이면 지도를 밀어내므로 absolute 로 지도 안에 띄운다.) */
+.floorSwitch {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  z-index: 10;
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+.floorSwitchBtn {
+  padding: 2px 10px;
+  line-height: 24px;
+  border-radius: 6px;
+  border: 1px solid var(--border-subtle);
+  background: rgba(0, 0, 0, 0.4);
+  backdrop-filter: blur(6px);
+  font-size: var(--font-size-sm);
+  color: var(--text-secondary);
+  font-weight: 400;
+  cursor: pointer;
+}
+.floorSwitchBtn:hover {
+  color: var(--text-primary);
+}
+.floorSwitchBtnActive {
+  background: var(--color-info-bg);
+  border-color: var(--color-info-border);
+  color: var(--text-primary);
+  font-weight: 700;
+}
+
+/* G-02: 경로명 검색 입력 + 새로고침 버튼 */
+.pathSearchInput {
+  box-sizing: border-box;
+  height: 34px;
+  width: 160px;
+  border-radius: 6px;
+  border: 1px solid var(--border-input);
+  background: var(--surface-5);
+  color: var(--text-primary);
+  padding: 0 10px;
+  font-size: var(--font-size-sm);
+}
+.pathSearchInput::placeholder {
+  color: var(--text-muted);
+}
+.pathRefreshBtn {
+  box-sizing: border-box;
+  height: 34px;
+  width: 34px;
+  border-radius: 6px;
+  border: 1px solid var(--border-subtle);
+  background: var(--surface-5);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.pathRefreshBtn img {
+  width: 16px;
+  height: 16px;
+}
+
+.pathHintInline {
+  font-size: var(--font-size-sm);
+  color: var(--text-tertiary);
+  font-weight: 400;
+}
+
+.pathListBoxWrap {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+}
+
+/* ── Shared primitives (kept duplicated in both routes for CSS-module isolation) ── */
+.status {
+    width: 100%;
+    border-collapse: collapse;
+    text-align: center;
+  }
+
+.status th {
+  padding: 8px 4px;
+  height: 44px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.status td {
+  padding: 8px 4px;
+  height: 48px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.status thead tr {
+    background: var(--surface-1);
+    border-bottom: 2px solid var(--border-subtle);
+}
+
+.status thead th {
+    position: relative;
+    color: var(--text-secondary);
+    font-size: var(--font-size-md);
+    font-weight: 600;
+    letter-spacing: -0.01em;
+}
+
+.status th:nth-child(1),
+.status td:nth-child(1) {
+    width: 5%;
+}
+
+.status th:nth-child(3),
+.status td:nth-child(3) {
+    width: 8%;
+}
+
+.status th:nth-child(5),
+.status td:nth-child(5) {
+    width: 20%;
+}
+
+.status th:nth-child(6),
+.status td:nth-child(6) {
+    width: 15%;
+}
+
+.status th:nth-child(7),
+.status td:nth-child(7) {
+    width: 8%;
+}
+
+.status th:nth-child(8),
+.status td:nth-child(8) {
+    width: 15%;
+}
+
+.status thead th img {
+    width: var(--icon-sm);
+    height: var(--icon-sm);
+}
+
+.status tbody td {
+    position: relative;
+    color: var(--text-secondary);
+    font-size: var(--font-size-md);
+}
+
+.status thead th:not(:last-child)::after {
+    content: "";
+    position: absolute;
+    top: 50%;
+    right: 0;
+    transform: translateY(-50%);
+    width: 1px;
+    height: 20px;
+    background: var(--border-subtle);
+}
+
+.status tbody tr:nth-child(2n) {
+  background-color: rgba(48, 53, 72, 0.6);
+}
+
+.status tr.selectedRow td {
+  background: var(--color-info-selected);
+}
+
+.status tr.selectedRow td:first-child {
+  box-shadow: inset 3px 0 0 var(--color-info);
+}
+
+.status tbody tr.selectedRow:hover td {
+  background: var(--color-info-selected);
+}
+
+.status tbody tr {
+  cursor: pointer;
+  transition: background 0.1s ease;
+}
+
+.status tbody tr:hover td {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.status td img {
+  width: auto;
+  height: var(--icon-sm);
+}
+
+.robotWorkCommonBtn {
+  height: 32px;
+
+  border-radius: 6px;
+  padding: 0 14px;
+
+  background: var(--surface-button);
+  border: 1px solid var(--border-subtle);
+
+  font-size: var(--font-size-sm);
+  font-weight: 500;
+  color: var(--text-secondary);
+
+  cursor: pointer;
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  white-space: nowrap;
+
+  transition: background 0.2s ease, transform 0.1s ease;
+  box-sizing: border-box;
+}
+
+.robotWorkCommonBtn:hover {
+  background: var(--surface-elevated);
+}
+
+.robotWorkCommonBtn:active {
+  transform: scale(0.97);
+}
+
+.robotWorkCommonBtn img {
+  height: 11px;
+  width: auto;
+}
+
+.placePrimaryBtn {
+  width: 120px;
+  height: 35px;
+  border-radius: 8px;
+  padding: 8px 14px;
+
+  background: var(--color-info-selected);
+  color: var(--text-primary);
+
+  font-size: var(--font-size-base);
+  font-weight: 600;
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.2s ease, transform 0.1s ease;
+}
+
+.placePrimaryBtn:hover {
+  background: var(--color-info-bg);
+}
+
+.placePrimaryBtn:active {
+  transform: scale(0.97);
+}
+
+.placePrimaryBtn:disabled {
+  opacity: 0.4;
+  background: #3a3f55; /* 기존 톤 유지 */
+}
+
+.placePrimaryBtn img {
+  width: 11px;
+  height: 11px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.status tbody tr.rowInactive td {
+  opacity: 0.4;
+}
+
+.status tbody tr.rowInactive:hover td {
+  opacity: 0.55;
+}
+
+.btnDisabled {
+  pointer-events: none;
+  opacity: 0.4;
+  cursor: default;
+}
+
+.emptyState {
+  text-align: center;
+  padding: 60px 0;
+  color: var(--text-muted);
+  font-size: var(--font-size-lg);
+  letter-spacing: 0.02em;
+}

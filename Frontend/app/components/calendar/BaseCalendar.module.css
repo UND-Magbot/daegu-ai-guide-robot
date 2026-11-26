@@ -1,0 +1,230 @@
+/* ===== 공통 캘린더 ===== */
+.calendar {
+  padding: 16px 18px 14px;
+  border-radius: 16px;
+  background: #111827;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.25);
+  color: #e5e7eb;
+  font-size: 14px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+
+/* size variants */
+.sizeDefault {
+  width: 250px;
+  min-height: 290px;
+}
+
+.sizeCompact {
+  width: 100%;
+  min-height: 240px;
+}
+
+.sizeModal {
+  width: 100%;
+  min-height: 260px;
+}
+
+/* 헤더 */
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+  color: #a4a4a8;
+}
+
+.header button {
+  background: transparent;
+  border: none;
+  color: #9ca3af;
+  cursor: pointer;
+  font-size: 8px;
+  padding: 4px 6px;
+}
+
+.header button img {
+  width: 4px;
+  height: 7px;
+}
+
+.header button div {
+  display: inline-flex;
+  align-items: center;
+  gap: 0;
+}
+
+.header button div img {
+  width: 3px;
+  height: 6px;
+}
+
+/* 모달 내 달력: 아이콘 축소 */
+.sizeModal .header button img {
+  width: 4px;
+  height: 7px;
+}
+
+.sizeModal .header button div img {
+  width: 3px;
+  height: 6px;
+}
+
+.sizeModal .header button {
+  padding: 3px 4px;
+}
+
+.sizeModal .header {
+  margin-bottom: 6px;
+}
+
+.title {
+  font-weight: 600;
+}
+
+/* 요일 행 */
+.weekRow {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  text-align: center;
+  margin-bottom: 6px;
+  font-size: 12px;
+  color: #9ca3af;
+}
+
+.sun {
+  color: #cf5058;
+}
+
+.sat {
+  color: #3084d7;
+}
+
+/* 날짜 그리드 */
+.daysGrid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 4px;
+  margin-bottom: 12px;
+}
+
+.daysGrid button {
+  font-size: 12px;
+}
+
+/* 주간 행 (single mode 주간 하이라이트용) */
+.weekLine {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 4px;
+  border-radius: 4px;
+}
+
+.weekRange {
+  background: #2B2E3E;
+}
+
+/* 날짜 셀 */
+.dayBtn {
+  height: 28px;
+  border-radius: 5px;
+  border: none;
+  background: transparent;
+  position: relative;
+  color: #9f9fa6;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.dayBtn:hover {
+  background: #1f2937;
+  color: #9f9fa6;
+}
+
+/* 선택된 날짜 (시작일 or 종료일) */
+.daySelected {
+  background: var(--accent, #00B0EE);
+  color: #ffffff;
+  font-weight: 600;
+}
+
+/* 오늘: 텍스트 아래 dot으로 표시 (선택 상태와 혼동 방지) */
+.dayToday {
+  background: transparent;
+  color: #ffffff;
+  font-weight: 700;
+  position: relative;
+}
+
+.dayToday::after {
+  content: "";
+  position: absolute;
+  bottom: 2px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--accent, #00B0EE);
+}
+
+/* 오늘 + 선택 동시 */
+.daySelected.dayToday {
+  background: var(--accent, #00B0EE);
+  color: #ffffff;
+}
+
+.daySelected.dayToday::after {
+  background: #ffffff;
+}
+
+/* 범위 사이 날짜 */
+.dayInRange {
+  background: rgba(0, 176, 238, 0.12);
+  color: #b0d4e8;
+}
+
+.dayDisabled {
+  color: #6b7280;
+  opacity: 0.7;
+  cursor: pointer;
+}
+
+.dayMinDisabled {
+  color: #707070;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+.dayOutside {
+  color: #6b7280;
+  opacity: 0.7;
+}
+
+.dayOutside:hover {
+  opacity: 1;
+}
+
+/* 하단 */
+.footer {
+  display: flex;
+  justify-content: flex-start;
+  margin-top: 4px;
+}
+
+.todayBtn {
+  height: 26px;
+  width: 75px;
+  border-radius: 5px;
+  border: none;
+  cursor: pointer;
+  font-size: 12px;
+  background: #60687f;
+  color: #d3dee3;
+}
+
+.todayBtn:hover {
+  background: #727b94;
+}

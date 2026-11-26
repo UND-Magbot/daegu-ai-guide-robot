@@ -1,0 +1,497 @@
+/* 음성 관리 › 안내 시나리오 — 목록 · 새로 만들기 · 편집기(단계 목록 + 단계 편집 패널).
+   표·버튼·배지는 voice.module.css, 세션 카드·구간 시험은 guideScenario.module.css 를 그대로 쓴다. */
+
+/* ── 편집기 틀 — 머리줄은 고정, 그 아래(점검·탭·단계)는 스크롤 ── */
+.editorRoot {
+  flex: 1;
+  min-height: 0;
+}
+
+.scrollBody {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 6px;
+}
+
+.scrollBody::-webkit-scrollbar {
+  width: 6px;
+}
+
+.scrollBody::-webkit-scrollbar-thumb {
+  background: var(--surface-5);
+  border-radius: 3px;
+}
+
+/* ── 상태 칩 ── */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 9px;
+  border-radius: 11px;
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.chipOn {
+  background: var(--color-success-bg, rgba(50, 127, 71, 0.25));
+  color: var(--color-success, #92d050);
+}
+
+.chipOff {
+  background: var(--surface-tab-inactive);
+  color: var(--text-tertiary);
+}
+
+.chipWarn {
+  background: rgba(255, 198, 53, 0.16);
+  color: var(--color-warning);
+}
+
+/* ── 사용 스위치 ── */
+.switch {
+  display: flex;
+  align-items: center;
+  width: 44px;
+  height: 24px;
+  padding: 2px;
+  border: none;
+  border-radius: 12px;
+  background: var(--surface-tab-inactive);
+  cursor: pointer;
+}
+
+.switch[aria-checked="true"] {
+  justify-content: flex-end;
+  background: var(--color-info, #107cab);
+}
+
+.switchKnob {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #ffffff;
+}
+
+/* ── 편집기 머리줄 ── */
+.headName {
+  font-size: var(--font-size-lg);
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.headCode {
+  font-size: var(--font-size-xs);
+  color: var(--text-muted);
+}
+
+.checkBox {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding: 12px 16px;
+  border: 1px solid var(--color-info-border);
+  border-radius: 10px;
+  background: rgba(0, 176, 238, 0.06);
+  font-size: var(--font-size-sm);
+}
+
+.checkList {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+}
+
+.checkItem {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-secondary);
+}
+
+.checkItemBad {
+  color: var(--color-warning);
+}
+
+.dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--color-success, #92d050);
+  flex-shrink: 0;
+}
+
+.dotBad {
+  background: var(--color-warning);
+}
+
+/* ── 탭 줄 ── */
+.tabBar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-bottom: 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  flex-wrap: wrap;
+}
+
+.tabBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 40px;
+  padding: 0 18px;
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: none;
+  color: var(--text-tertiary);
+  font: inherit;
+  font-size: var(--font-size-md);
+  cursor: pointer;
+}
+
+.tabBtnActive {
+  border-bottom-color: var(--color-info, #00b0ee);
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.dirtyDot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--color-warning);
+}
+
+.dirtyText {
+  font-size: var(--font-size-xs);
+  color: var(--color-warning);
+}
+
+/* ── 단계 편집 (왼쪽 목록 · 오른쪽 패널) ── */
+.editor {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 14px;
+  align-items: start;
+}
+
+@media (max-width: 1100px) {
+  .editor {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.stepList {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.stepListHead {
+  padding: 10px 12px;
+  background: var(--surface-4);
+  font-size: var(--font-size-sm);
+  color: var(--text-tertiary);
+}
+
+.stepRow {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.stepRowSel {
+  background: rgba(0, 176, 238, 0.12);
+  box-shadow: inset 3px 0 0 var(--color-info, #00b0ee);
+}
+
+.stepRowOff {
+  opacity: 0.55;
+}
+
+.stepPick {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  gap: 8px;
+  align-items: center;
+  padding: 4px 2px;
+  border: none;
+  background: none;
+  color: var(--text-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.stepNo {
+  width: 26px;
+  color: var(--text-muted);
+  font-size: var(--font-size-md);
+  flex-shrink: 0;
+}
+
+.stepBody {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.stepTitle {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  font-size: var(--font-size-lg);
+  font-weight: 600;
+}
+
+.stepFlow {
+  font-size: var(--font-size-md);
+  color: var(--text-secondary);
+}
+
+.stepWarn {
+  font-size: var(--font-size-md);
+  color: var(--color-warning);
+}
+
+.waitTag {
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: var(--font-size-sm);
+  font-weight: 500;
+  background: var(--surface-tab-inactive);
+  color: #ffffff;
+}
+
+.waitTag_user {
+  background: #196189;
+}
+
+.waitTag_operator {
+  background: #a96e3a;
+}
+
+.waitTag_arrival {
+  background: #327f47;
+}
+
+.startTag {
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: var(--font-size-sm);
+  border: 1px solid var(--color-info-border);
+  color: var(--text-secondary);
+}
+
+.arrow {
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 4px;
+  background: var(--surface-tab-inactive);
+  color: var(--text-secondary);
+  font-size: 10px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.arrow:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.addStep {
+  padding: 10px 12px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px;
+  border-radius: 10px;
+  background: var(--surface-3, #262a3e);
+  font-size: var(--font-size-md);
+}
+
+.panelTitle {
+  color: var(--text-tertiary);
+}
+
+.fieldGrid {
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+}
+
+.fieldGridSub {
+  padding-top: 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.fieldLabel {
+  color: var(--text-tertiary);
+}
+
+.pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.pill {
+  min-height: 32px;
+  padding: 0 12px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 6px;
+  background: var(--surface-tab-inactive);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: var(--font-size-md);
+  cursor: pointer;
+}
+
+.pillOn {
+  border-color: var(--color-info, #00b0ee);
+  background: rgba(0, 176, 238, 0.18);
+  color: var(--text-primary);
+}
+
+.input {
+  min-height: 34px;
+  padding: 0 10px;
+  border: none;
+  border-radius: 6px;
+  background: var(--surface-input, #3b415f);
+  color: var(--text-primary);
+  font: inherit;
+}
+
+.textarea {
+  padding: 8px 10px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: var(--surface-input, #3b415f);
+  color: var(--text-primary);
+  font: inherit;
+  line-height: 1.5;
+  resize: vertical;
+}
+
+.fieldBad {
+  border-color: var(--color-warning);
+}
+
+.hintText {
+  font-size: var(--font-size-sm);
+  color: var(--text-muted);
+}
+
+.warnText {
+  font-size: var(--font-size-sm);
+  color: var(--color-warning);
+}
+
+.panelActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.issueList {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0 0 12px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  background: var(--surface-3, #262a3e);
+  font-size: var(--font-size-sm);
+  list-style: none;
+}
+
+.issueErr {
+  color: var(--color-error);
+}
+
+.issueWarn {
+  color: var(--color-warning);
+}
+
+.issueBtn {
+  padding: 0;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+/* ── 목록 ── */
+.listHint {
+  margin-top: 8px;
+  font-size: var(--font-size-xs);
+  color: var(--text-tertiary);
+}
+
+/* ── 버전 기록 ── */
+.versionList {
+  display: flex;
+  flex-direction: column;
+  max-height: 360px;
+  overflow: auto;
+  margin: 12px 0;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+}
+
+.versionRow {
+  display: grid;
+  grid-template-columns: 56px minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  padding: 8px 12px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  font-size: var(--font-size-sm);
+}
+
+.versionRow:first-child {
+  border-top: none;
+}
+
+.versionMeta {
+  font-size: var(--font-size-xs);
+  color: var(--text-muted);
+}
+
+/* ── 새로 만들기 창 ── */
+.modalBox {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  width: min(620px, calc(100vw - 32px));
+  padding: 22px 24px;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 14px;
+  background: var(--surface-3, #262a3e);
+}
+
+.modalTitle {
+  margin: 0;
+  font-size: var(--font-size-lg);
+}

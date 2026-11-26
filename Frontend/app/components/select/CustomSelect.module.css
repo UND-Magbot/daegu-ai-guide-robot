@@ -1,0 +1,179 @@
+.selectWrapper {
+  position: relative;
+  width: 373px;
+  flex: 1;
+  min-width: 0;
+  height: 34px;
+}
+
+.selectWrapperCompact {
+  width: 72px;
+  flex: 0 0 72px;
+}
+
+.select {
+  width: 100%;
+  height: 34px;
+  background: var(--surface-5);
+  border-radius: 6px;
+  border: 1px solid var(--border-subtle);
+  padding: 0 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  cursor: pointer;
+  font-size: var(--font-size-md);
+  color: var(--text-primary);
+  transition: border-color 0.15s ease;
+}
+
+.selectCompact {
+  padding: 0 7px;
+  font-size: 12px;
+}
+
+.select img {
+  width: 14px;
+  height: auto;
+  flex-shrink: 0;
+}
+
+/* 선택값이 길면 넘치지 않게 말줄임 (드롭다운 목록에는 전체가 보인다). 화살표는 밀리지 않음. */
+.select > span {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-right: 8px;
+}
+
+.selectCompact img {
+  width: 10px;
+  height: auto;
+}
+
+.selectError {
+  border-color: var(--color-error) !important;
+}
+
+.selectDisabled {
+  opacity: 0.5;
+  pointer-events: none;
+  cursor: not-allowed;
+}
+
+.dropdown {
+  width: 100%;
+  height: auto;
+  padding: 8px 6px;
+  background: var(--surface-4);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  position: absolute;
+  top: calc(100% + 6px);
+  cursor: pointer;
+  z-index: 20;
+  overflow: hidden;
+}
+
+.dropdownCompact {
+  width: 72px;
+}
+
+.dropdownOverlay {
+  z-index: 200;
+}
+
+.scrollArea {
+  max-height: 175px;
+  overflow-y: scroll;
+  padding-right: 3px;
+  box-sizing: border-box;
+  scrollbar-width: none;
+}
+
+.scrollArea::-webkit-scrollbar {
+  display: none;
+}
+
+.scrollAreaCompact {
+  max-height: 108px;
+}
+
+.option {
+  width: 100%;
+  line-height: 20px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  color: var(--text-secondary);
+  font-size: var(--font-size-md);
+  transition: background 0.15s ease;
+}
+
+.option:hover {
+  background: var(--surface-elevated);
+  color: var(--text-primary);
+}
+
+/* 고를 수 없는 항목(노드망으로 갈 수 없는 장소·경로) — 흐리게, 선택 안 됨 */
+.optionDisabled,
+.optionDisabled:hover {
+  opacity: 0.45;
+  cursor: not-allowed;
+  background: transparent;
+  color: var(--text-secondary);
+}
+
+.optionDisabledTag {
+  margin-left: 6px;
+  padding: 0 6px;
+  border-radius: 8px;
+  font-size: 11px;
+  background: var(--color-error-bg);
+  color: #ffd0d0;
+}
+
+
+.scrollTrack {
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  right: 3px;
+  width: 2px;
+  border-radius: 50px;
+  background: transparent;
+}
+
+.scrollThumb {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 50%;
+  border-radius: 50px;
+  background: #EAEAED;
+}
+
+.emptyMessage {
+  padding: 10px;
+  color: var(--text-muted);
+  font-size: 12px;
+  text-align: center;
+}
+
+.inlineInput {
+  width: 100%;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--text-primary);
+  font-size: inherit;
+  padding: 0;
+  cursor: text;
+}
+
+.inlineInput::placeholder {
+  color: var(--text-muted);
+}

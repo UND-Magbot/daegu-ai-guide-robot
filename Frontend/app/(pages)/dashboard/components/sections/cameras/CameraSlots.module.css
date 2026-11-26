@@ -1,0 +1,318 @@
+/* ── 카메라 슬롯 ── */
+.slotContainer {
+  width: 100%;
+  height: 100%;
+  position: relative;
+  overflow: hidden;
+  border-radius: 10px;
+  background: var(--surface-1);
+}
+
+.cameraImg {
+  width: 100%;
+  height: 100%;
+  object-fit: fill;
+  background: #000;
+  display: block;
+}
+
+.slotLabel {
+  position: absolute;
+  bottom: 8px;
+  left: 8px;
+  z-index: 1;
+  padding: 3px 10px;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(6px);
+  border-radius: 4px;
+  font-size: var(--font-size-sm);
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.robotLabel {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 10px;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(6px);
+  border-radius: 4px;
+  font-size: var(--font-size-sm);
+  font-weight: 500;
+  color: var(--text-accent);
+}
+
+.robotLabelStatus {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: var(--font-size-xs);
+  font-weight: 400;
+  color: var(--text-secondary);
+}
+
+.robotLabelDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+
+.robotLabelDotOnline {
+  background: #22c55e;
+  box-shadow: 0 0 4px rgba(34, 197, 94, 0.5);
+}
+
+.robotLabelDotOffline {
+  background: #ef4444;
+  box-shadow: 0 0 4px rgba(239, 68, 68, 0.5);
+}
+
+.robotLabelDivider {
+  color: var(--text-muted);
+  opacity: 0.3;
+}
+
+/* ── 로딩 ── */
+.loadingOverlay {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: var(--surface-1);
+  color: var(--text-tertiary);
+  font-size: var(--font-size-sm);
+}
+
+.spinner {
+  width: 24px;
+  height: 24px;
+  border: 2px solid var(--surface-5);
+  border-top-color: var(--color-info);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ── 에러 ── */
+.errorOverlay {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: var(--surface-1);
+  color: var(--text-tertiary);
+  font-size: var(--font-size-sm);
+}
+
+.retryBtn {
+  padding: 4px 14px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--surface-5);
+  color: var(--text-primary);
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.retryBtn:hover {
+  background: var(--surface-elevated);
+}
+
+/* ── 빈 슬롯 ── */
+.emptySlot {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+  background: var(--surface-1);
+  color: var(--text-muted);
+  font-size: var(--font-size-sm);
+}
+
+/* ── 스트림 상태 표시 ── */
+/* LIVE 배지(녹색) */
+.liveBadge {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 4;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 9px 3px 8px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(6px);
+  border: 1px solid rgba(146, 208, 80, 0.45);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: var(--color-success);
+  pointer-events: none;
+}
+
+.liveDot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--color-success);
+  box-shadow: 0 0 6px rgba(146, 208, 80, 0.55);
+  animation: livePulse 1.6s ease-in-out infinite;
+}
+
+@keyframes livePulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.45; transform: scale(0.8); }
+}
+
+/* 재연결 중(직전 프레임 유지) */
+.reconnectOverlay {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: rgba(13, 17, 23, 0.35);
+  font-size: var(--font-size-sm);
+}
+
+/* 보조 문구 — "기다리면 되는지 / 눌러야 하는지"를 알려준다 */
+.overlayDesc {
+  max-width: 90%;
+  color: #9aa3b5;
+  font-size: 11.5px;
+  line-height: 1.4;
+  text-align: center;
+}
+
+/* 신호 없음 — 앰버 */
+.noSignalIcon {
+  color: var(--color-warning);
+  opacity: 0.85;
+}
+
+.msgAmber {
+  color: var(--color-warning);
+  font-weight: 500;
+}
+
+.spinnerWarn {
+  border-top-color: var(--color-warning);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .liveDot { animation: none; }
+}
+
+/* ── 카메라 슬롯 래퍼 ── */
+.camSlotWrapper {
+  position: relative;
+}
+
+/* ── 스크롤 바 ── */
+.scrollBar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 6px 0;
+  flex-shrink: 0;
+}
+
+.scrollBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: 6px;
+  background: var(--color-info);
+  color: #fff;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.scrollBtn:hover:not(:disabled) {
+  filter: brightness(1.2);
+}
+
+.scrollBtn:disabled {
+  background: var(--surface-5);
+  color: var(--text-muted);
+  cursor: default;
+}
+
+.scrollIndicator {
+  font-size: var(--font-size-base);
+  font-weight: 600;
+  color: var(--text-primary);
+  padding: 0 4px;
+}
+
+/* ── 전체보기 버튼 ── */
+.viewAllBtn {
+  width: 100%;
+  padding: 6px 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--surface-3);
+  color: var(--text-secondary);
+  font-size: var(--font-size-xs);
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s;
+  text-align: center;
+}
+
+.viewAllBtn:hover {
+  background: var(--surface-elevated);
+  color: var(--text-primary);
+}
+
+/* ── 확장 아이콘 ── */
+.expandBtn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 2;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(6px);
+  color: var(--text-primary);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.slotContainer:hover .expandBtn {
+  opacity: 1;
+}

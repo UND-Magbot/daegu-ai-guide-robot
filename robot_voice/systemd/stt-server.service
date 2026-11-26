@@ -1,0 +1,45 @@
+# 로컬 STT 서버 — OpenAI 크레딧 없이 전사한다.
+#
+# 왜: 2026-09-30 크레딧 소진(429 credit_balance_exhausted)으로 STT 가 멈췄다.
+#     Jetson 에 구 시스템의 faster-whisper small(CUDA·float16)이 남아 있어 그걸 쓴다.
+#     robot_voice 는 STT_LOCAL_URL 이 설정되면 이 서버를 호출한다(비우면 OpenAI 로 복귀).
+#
+# ⚠ 파이썬은 **구 시스템 venv** 를 쓴다. 그쪽에만 CUDA 로 소스 빌드한 CTranslate2 가 있다.
+#   PyPI 휠은 CPU 전용이라 /opt/robot/voice/venv 에 설치하면 GPU 를 못 쓰고 4배 느려진다.
+#
+# ⚠ GPU 를 쓰므로 발열이 오르고 팬이 더 돈다. 마이크 배경 소음이 올라가면
+#   VAD 문턱(소음 × VAD_NOISE_RATIO)도 같이 올라간다 — 2026-09-30 의 미해결 항목이다.
+#
+# 설치:
+#   sudo cp stt-server.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now stt-server
+#   curl -s localhost:8091/health
+[Unit]
+Description=Local STT server (faster-whisper, CUDA) for robot_voice
+After=network.target
+
+[Service]
+Type=simple
+User=und02
+SupplementaryGroups=audio
+WorkingDirectory=/opt/robot/voice
+Environment=PYTHONUNBUFFERED=1
+# 모델. 잡음 섞인 오디오에서는 큰 모델이 확실히 강하다 — 이 현장은 배경 소음이
+# 크고(실측 무음 rms 0.03~0.12, 197~224Hz 피크) 발화가 소음의 2배 수준까지 떨어진다.
+# 구 시스템 실측은 **깨끗한 오디오** 기준이라 small 5/5 · medium 5/5 로 같았고
+# medium 이 2.3배 느리다는 이유로 small 을 골랐다. 지금 조건은 다르다.
+#   small  약 0.8초 / medium 약 1.8초 (지연 DoD 1초를 넘긴다 — 응답 속도와 맞바꾼다)
+# 모델은 이미 캐시에 있다(~/.cache/huggingface: tiny/base/small/medium) — 다운로드 없음.
+Environment=STT_SERVER_MODEL=medium
+ExecStart=/home/und02/project/voice/voice_assistant/.venv/bin/python /opt/robot/voice/robot_voice/stt_server.py
+
+# 모델 로드가 20~30초 걸린다 — 그 사이 재시작으로 겹쳐 뜨지 않게 넉넉히 둔다.
+TimeoutStartSec=180
+Restart=always
+RestartSec=10
+
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

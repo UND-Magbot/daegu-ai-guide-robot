@@ -1,0 +1,433 @@
+"use client";
+
+import { useCallback, useMemo, useState, useRef, forwardRef, useImperativeHandle } from "react";
+import dynamic from "next/dynamic";
+import type { CanvasMapProps, POIItem } from "./types";
+import { useMapCanvas } from "@/app/hooks/useMapCanvas";
+import type { ZoomAction } from "@/app/utils/zoom";
+import NodeNetworkOverlay from "./NodeNetworkOverlay";
+import RobotMarker from "./RobotMarker";
+import POIOverlay from "./POIOverlay";
+import POIDetailCard from "./POIDetailCard";
+import DebugTestMarker from "./DebugTestMarker";
+import { useDebugMap } from "./DebugMapContext";
+import styles from "./CanvasMap.module.css";
+
+// 3D 맵 Lazy Load — Three.js 번들은 3D 전환 시 클라이언트에서만 로드
+const Map3DCanvas = dynamic(() => import("@/app/components/map3d/Map3DCanvas"), {
+  ssr: false,
+  loading: () => (
+    <div style={{ width: "100%", height: "100%", background: "#1a1d2e", display: "flex", alignItems: "center", justifyContent: "center", color: "#888" }}>
+      3D 맵 로딩중...
+    </div>
+  ),
+});
+
+export type CanvasMapHandle = {
+  handleZoom: (action: ZoomAction) => void;
+  worldToPixelScreen: (wx: number, wy: number) => { x: number; y: number };
+  pixelToWorldScreen: (px: number, py: number) => { x: number; y: number };
+  /** 3D에서만 제공 — 현재 카메라 투영 스크린 좌표 */
+  projectToScreen?: (wx: number, wy: number) => { x: number; y: number; behind: boolean };
+};
+
+/* ============================================================
+ * Inner2D — 2D 전용 훅·렌더 (Map2D/Map3D를 별도 컴포넌트로 분리해
+ * 뷰 전환 시 자연스럽게 언마운트/마운트 → 캔버스 재초기화)
+ * ============================================================ */
+const Inner2D = forwardRef<CanvasMapHandle, CanvasMapProps>(function Inner2D(
+  {
+    config,
+    robotPos,
+    robotName,
+    robots: multiRobots,
+    pois,
+    navPath,
+    navNetwork = null,
+    networkLevel = "faint",
+    activeRoute = null,
+    poiBlockedReason,
+    selectedPoiId,
+    showRobot = false,
+    robotMarkerSize,
+    showPois = false,
+    showPath = false,
+    showLabels = true,
+    onPoiClick,
+    onPoiNavigate,
+    onMapClick,
+    onMapMouseMove,
+    scanPoints,
+    previewScanPoints,
+    poseArrow,
+    poseDrawMode = false,
+    onPoseDragStart,
+    onPoseDrag,
+    onPoseDragEnd,
+    interactive = true,
+    className,
+    style,
+    children,
+  },
+  ref
+) {
+  const { debugEnabled, testCoordinates } = useDebugMap();
+  const [hoverCoord, setHoverCoord] = useState<{ x: number; y: number } | null>(null);
+  const [detailPoi, setDetailPoi] = useState<POIItem | null>(null);
+  const draggingPoseRef = useRef(false);
+
+  const {
+    canvasRef,
+    wrapperRef,
+    scale,
+    translate,
+    isPanning,
+    onMouseDown,
+    onMouseMove,
+    endPan,
+    handleZoom,
+    worldToPixelScreen,
+    pixelToWorldScreen,
+  } = useMapCanvas(
+    config,
+    showPath ? navPath : null,
+    interactive,
+    scanPoints,
+    poseArrow,
+    // pose 지정(위치 재조정) 중에는 벽을 원본으로 — 스캔을 실제 벽 선에 맞춰야 한다
+    poseDrawMode,
+    previewScanPoints
+  );
+
+  useImperativeHandle(ref, () => ({
+    handleZoom,
+    worldToPixelScreen,
+    pixelToWorldScreen,
+  }));
+
+  const handleClick = useCallback(
+    (e: React.MouseEvent) => {
+      if (isPanning) return;
+      if (detailPoi) setDetailPoi(null);
+      if (!onMapClick) return;
+      const wrapper = wrapperRef.current;
+      if (!wrapper) return;
+      const rect = wrapper.getBoundingClientRect();
+      const cx = wrapper.clientWidth / 2;
+      const cy = wrapper.clientHeight / 2;
+      const rawX = (e.clientX - rect.left - cx - translate.x) / scale + cx;
+      const rawY = (e.clientY - rect.top - cy - translate.y) / scale + cy;
+      const world = pixelToWorldScreen(rawX, rawY);
+      onMapClick(world);
+    },
+    [onMapClick, isPanning, scale, translate, pixelToWorldScreen, wrapperRef, detailPoi]
+  );
+
+  const handleMouseMove = useCallback(
+    (e: React.MouseEvent) => {
+      onMouseMove(e);
+      const wrapper = wrapperRef.current;
+      if (!wrapper) return;
+      const rect = wrapper.getBoundingClientRect();
+      const cx = wrapper.clientWidth / 2;
+      const cy = wrapper.clientHeight / 2;
+      const rawX = (e.clientX - rect.left - cx - translate.x) / scale + cx;
+      const rawY = (e.clientY - rect.top - cy - translate.y) / scale + cy;
+      const world = pixelToWorldScreen(rawX, rawY);
+      if (debugEnabled) setHoverCoord(world);
+      if (onMapMouseMove) onMapMouseMove(world);
+    },
+    [onMouseMove, onMapMouseMove, debugEnabled, scale, translate, pixelToWorldScreen, wrapperRef]
+  );
+
+  // 마우스 이벤트 → 월드 좌표 (CSS transform: scale/translate 반영). handleClick 과 동일 수식.
+  const eventToWorld = useCallback(
+    (e: React.MouseEvent) => {
+      const wrapper = wrapperRef.current;
+      if (!wrapper) return null;
+      const rect = wrapper.getBoundingClientRect();
+      const cx = wrapper.clientWidth / 2;
+      const cy = wrapper.clientHeight / 2;
+      const rawX = (e.clientX - rect.left - cx - translate.x) / scale + cx;
+      const rawY = (e.clientY - rect.top - cy - translate.y) / scale + cy;
+      return pixelToWorldScreen(rawX, rawY);
+    },
+    [translate, scale, pixelToWorldScreen, wrapperRef]
+  );
+
+  // rviz식 pose 드래그: 누른 지점=위치, 끌기=방향, 뗌=확정. poseDrawMode 에서 팬 대신 동작.
+  const handleWrapperDown = useCallback(
+    (e: React.MouseEvent) => {
+      if (poseDrawMode) {
+        const w = eventToWorld(e);
+        if (w) {
+          draggingPoseRef.current = true;
+          onPoseDragStart?.(w);
+        }
+        return; // 팬 비활성
+      }
+      onMouseDown(e);
+    },
+    [poseDrawMode, eventToWorld, onPoseDragStart, onMouseDown]
+  );
+
+  const handleWrapperMove = useCallback(
+    (e: React.MouseEvent) => {
+      if (poseDrawMode) {
+        if (draggingPoseRef.current) {
+          const w = eventToWorld(e);
+          if (w) onPoseDrag?.(w);
+        }
+        return;
+      }
+      handleMouseMove(e);
+    },
+    [poseDrawMode, eventToWorld, onPoseDrag, handleMouseMove]
+  );
+
+  const handleWrapperUp = useCallback(() => {
+    if (poseDrawMode) {
+      if (draggingPoseRef.current) {
+        draggingPoseRef.current = false;
+        onPoseDragEnd?.();
+      }
+      return;
+    }
+    endPan();
+  }, [poseDrawMode, onPoseDragEnd, endPan]);
+
+  const robotScreen = robotPos ? worldToPixelScreen(robotPos.x, robotPos.y) : null;
+
+  const poiScreenItems = pois?.map((poi) => {
+    const sp = worldToPixelScreen(poi.x, poi.y);
+    return { poi, screenX: sp.x, screenY: sp.y };
+  });
+
+  const cursorStyle = interactive
+    ? isPanning
+      ? "grabbing"
+      : scale > 1
+        ? "grab"
+        : "default"
+    : "default";
+
+  return (
+    <div
+      ref={wrapperRef}
+      className={`${styles.wrapper} ${className || ""}`}
+      style={{
+        ...style,
+        cursor: style?.cursor || cursorStyle,
+      }}
+      onMouseDown={handleWrapperDown}
+      onMouseMove={handleWrapperMove}
+      onMouseUp={handleWrapperUp}
+      onMouseLeave={handleWrapperUp}
+      onClick={handleClick}
+    >
+      <div
+        style={{
+          position: "absolute",
+          width: "100%",
+          height: "100%",
+          transform: `translate(${translate.x}px, ${translate.y}px) scale(${scale})`,
+          transformOrigin: "center center",
+          transition: isPanning ? "none" : "transform 120ms ease",
+        }}
+      >
+        <canvas
+          ref={canvasRef}
+          style={{ width: "100%", height: "100%", pointerEvents: "none" }}
+        />
+
+        {/* 노드망·이동 경로 — 로봇·장소 마커 아래 */}
+        {(navNetwork || activeRoute) && (
+          <NodeNetworkOverlay network={navNetwork} level={networkLevel} route={activeRoute}
+            toScreen={worldToPixelScreen} scale={scale} />
+        )}
+
+        {/* 다중 로봇 */}
+        {multiRobots && multiRobots.map((r) => {
+          const sp = worldToPixelScreen(r.position.x, r.position.y);
+          return (
+            <RobotMarker key={r.id} screenX={sp.x} screenY={sp.y} yaw={r.position.yaw} name={r.name} size={robotMarkerSize} scale={scale} uncertain={r.uncertain} />
+          );
+        })}
+
+        {/* 단일 로봇 (하위 호환) */}
+        {!multiRobots && showRobot && robotScreen && (
+          <RobotMarker screenX={robotScreen.x} screenY={robotScreen.y} yaw={robotPos?.yaw} name={robotName} size={robotMarkerSize} scale={scale} />
+        )}
+
+        {showPois && poiScreenItems && (
+          <POIOverlay
+            items={poiScreenItems}
+            showLabels={showLabels}
+            selectedId={selectedPoiId}
+            onItemClick={(poi) => {
+              setDetailPoi((prev) => (prev?.id === poi.id ? null : poi));
+              onPoiClick?.(poi);
+            }}
+            scale={scale}
+          />
+        )}
+
+        {/* Debug test markers */}
+        {debugEnabled &&
+          testCoordinates.map((coord, i) => {
+            const sp = worldToPixelScreen(coord.x, coord.y);
+            return (
+              <DebugTestMarker
+                key={i}
+                screenX={sp.x}
+                screenY={sp.y}
+                label={coord.label || `(${coord.x}, ${coord.y})`}
+              />
+            );
+          })}
+
+        {children}
+      </div>
+
+      {/* POI 상세 카드 (zoom 바깥 — 항상 고정 크기) */}
+      {detailPoi && (() => {
+        const sp = worldToPixelScreen(detailPoi.x, detailPoi.y);
+        const wrapper = wrapperRef.current;
+        const cx = wrapper ? wrapper.clientWidth / 2 : 0;
+        const cy = wrapper ? wrapper.clientHeight / 2 : 0;
+        const screenX = (sp.x - cx) * scale + cx + translate.x;
+        const screenY = (sp.y - cy) * scale + cy + translate.y;
+        return (
+          <POIDetailCard
+            poi={detailPoi}
+            screenX={screenX}
+            screenY={screenY}
+            onClose={() => setDetailPoi(null)}
+            onNavigate={onPoiNavigate}
+          blockedReason={detailPoi && poiBlockedReason ? poiBlockedReason(detailPoi) : null}
+          />
+        );
+      })()}
+
+      {/* Debug coordinate readout */}
+      {debugEnabled && hoverCoord && (
+        <div
+          style={{
+            position: "absolute",
+            bottom: 4,
+            left: 4,
+            background: "rgba(0,0,0,0.75)",
+            color: "#0f0",
+            padding: "2px 8px",
+            fontSize: 11,
+            zIndex: 100,
+            pointerEvents: "none",
+            borderRadius: 3,
+            fontFamily: "monospace",
+          }}
+        >
+          x: {hoverCoord.x.toFixed(2)}, y: {hoverCoord.y.toFixed(2)}
+        </div>
+      )}
+    </div>
+  );
+});
+
+/* ============================================================
+ * Inner3D — 3D 전용 훅·렌더
+ * ============================================================ */
+const Inner3D = forwardRef<CanvasMapHandle, CanvasMapProps>(function Inner3D(
+  {
+    config,
+    robotPos,
+    robotName,
+    robots: multiRobots,
+    pois,
+    navPath,
+    navNetwork,
+    networkLevel,
+    activeRoute,
+    poiBlockedReason,
+    selectedPoiId,
+    showRobot = false,
+    showPois = false,
+    showPath = false,
+    showLabels = true,
+    onPoiClick,
+    onPoiNavigate,
+    className,
+    style,
+  },
+  ref
+) {
+  const [detailPoi3D, setDetailPoi3D] = useState<POIItem | null>(null);
+  const [cardScreen, setCardScreen] = useState<{ x: number; y: number; behind: boolean } | null>(null);
+
+  const firstMultiRobot = multiRobots && multiRobots.length > 0 ? multiRobots[0] : null;
+  const effectiveRobotPos = robotPos ?? firstMultiRobot?.position ?? null;
+  const effectiveRobotName = robotName ?? firstMultiRobot?.name;
+  const effectiveShowRobot = showRobot || !!firstMultiRobot;
+
+  const handle3DPoiClick = (poi: POIItem) => {
+    setDetailPoi3D((prev) => (prev?.id === poi.id ? null : poi));
+    onPoiClick?.(poi);
+  };
+
+  const handleTrackedScreen = useCallback((s: { x: number; y: number; behind: boolean } | null) => {
+    setCardScreen(s);
+  }, []);
+
+  const trackedPoi = useMemo(
+    () => (detailPoi3D ? { x: detailPoi3D.x, y: detailPoi3D.y } : null),
+    [detailPoi3D]
+  );
+
+  return (
+    <div className={`${styles.wrapper} ${className || ""}`} style={style}>
+      <Map3DCanvas
+        ref={ref}
+        config={config}
+        robotPos={effectiveRobotPos}
+        robotName={effectiveRobotName}
+        pois={pois}
+        navPath={navPath}
+        navNetwork={navNetwork}
+        networkLevel={networkLevel}
+        activeRoute={activeRoute}
+        selectedPoiId={selectedPoiId}
+        showRobot={effectiveShowRobot}
+        showPois={showPois}
+        showPath={showPath}
+        showLabels={showLabels}
+        onPoiClick={handle3DPoiClick}
+        trackedPoi={trackedPoi}
+        onTrackedPoiScreen={handleTrackedScreen}
+      />
+      {detailPoi3D && cardScreen && !cardScreen.behind && (
+        <POIDetailCard
+          poi={detailPoi3D}
+          screenX={cardScreen.x}
+          screenY={cardScreen.y}
+          onClose={() => setDetailPoi3D(null)}
+          onNavigate={onPoiNavigate}
+          blockedReason={detailPoi3D && poiBlockedReason ? poiBlockedReason(detailPoi3D) : null}
+        />
+      )}
+    </div>
+  );
+});
+
+/* ============================================================
+ * CanvasMap — 뷰 모드에 따라 Inner2D / Inner3D 중 하나만 마운트
+ * ============================================================ */
+const CanvasMap = forwardRef<CanvasMapHandle, CanvasMapProps>(function CanvasMap(
+  props,
+  ref
+) {
+  if (props.view === "3d") {
+    return <Inner3D {...props} ref={ref} />;
+  }
+  return <Inner2D {...props} ref={ref} />;
+});
+
+export default CanvasMap;

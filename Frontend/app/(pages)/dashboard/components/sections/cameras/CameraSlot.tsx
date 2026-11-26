@@ -1,0 +1,310 @@
+"use client";
+
+import React, { useState, useRef, useEffect, useCallback } from "react";
+import styles from "./CameraSlots.module.css";
+import type { Camera, RobotRowData } from "@/app/types";
+import { CAMERA_BASE } from "@/app/config";
+import WebRTCPlayer from "@/app/components/camera/WebRTCPlayer";
+import { createThermalFrameSink, type ThermalFrameSink } from "@/app/components/camera/thermalFrameSink";
+import { STREAM_COPY, LIVE_LABEL, RETRY_LABEL } from "@/app/components/camera/streamStatusCopy";
+
+type CameraSlotProps = {
+  camera: Camera;
+  robotName: string;
+  robot?: RobotRowData | null;
+  onExpand?: (e: React.MouseEvent) => void;
+  /** 작게 보이는 슬롯용 — 백엔드 프록시에서 저해상도·저품질로 받아 부하를 줄임 */
+  lowRes?: boolean;
+  /**
+   * false면 스트림 연결·재연결을 멈춘다. 로봇이 오프라인이면 false로 내려
+   * 발행자 없는 스트림에 무한 재연결하는 것을 막는다. (기본 true)
+   */
+  enabled?: boolean;
+};
+
+// 첫 프레임 대기 한도 — 백엔드 RTSP 프록시는 WAKE 후 캡처 open + 재연결까지
+// 수 초가 걸릴 수 있어 넉넉히 둔다(짧게 잡으면 정상인데도 "연결 실패"로 오인).
+const CAM_TIMEOUT_MS = 20_000;
+// 열화상(WS) 스트림 watchdog — 새 프레임이 끊겨도(half-open/서버 정지) 자동 복구.
+const THERMAL_STALL_MS = 6_000;      // 이 시간 동안 새 프레임 없으면 재연결
+const THERMAL_WATCHDOG_MS = 2_000;   // watchdog 점검 주기
+
+export default function CameraSlot({ camera, robotName, robot, onExpand, lowRes = false, enabled = true }: CameraSlotProps) {
+  const [isLoading, setIsLoading] = useState(true);
+  const [hasError, setHasError] = useState(false);
+  const [streamUrl, setStreamUrl] = useState("");
+  const [thermalUrl, setThermalUrl] = useState<string | null>(null);
+  // '연결 중'(최초)과 '재연결 중'(끊긴 뒤) 구분용.
+  const [hadFrame, setHadFrame] = useState(false);
+
+  const wsRef = useRef<WebSocket | null>(null);
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const retryRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const mjpegImgRef = useRef<HTMLImageElement | null>(null);
+  const unmountedRef = useRef(false);
+  const connectRef = useRef<(() => void) | null>(null);
+  const errorCountRef = useRef(0);
+  const wsWatchdogRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const lastFrameAtRef = useRef(0);
+  const everFrameRef = useRef(false);   // 한 번이라도 프레임을 받았는가(재연결 시 스피너 억제용)
+
+  // 열화상 프레임 싱크 — 최신 프레임만 ~15fps 상한으로 렌더(backlog/빨리감기 방지)
+  const sinkRef = useRef<ThermalFrameSink | null>(null);
+  const getSink = useCallback(() => {
+    if (!sinkRef.current) sinkRef.current = createThermalFrameSink(setThermalUrl);
+    return sinkRef.current;
+  }, []);
+
+  const isThermal = (camera.streamType ?? "rtsp") === "ws";
+  // RTSP 카메라는 MediaMTX WebRTC(WebRTCPlayer)로 저지연 송출
+  const isWebrtc = (camera.streamType ?? "rtsp") === "rtsp";
+
+  const clearTimers = useCallback(() => {
+    if (timeoutRef.current) { clearTimeout(timeoutRef.current); timeoutRef.current = null; }
+    if (retryRef.current) { clearInterval(retryRef.current); retryRef.current = null; }
+  }, []);
+
+  const onSuccess = useCallback(() => {
+    clearTimers();
+    errorCountRef.current = 0;
+    setIsLoading(false);
+    setHasError(false);
+    setHadFrame(true);
+  }, [clearTimers]);
+
+  const onFail = useCallback(() => {
+    // 진행 중인 watchdog 정지 (재연결/에러대기 중 중복 발화 방지)
+    if (wsWatchdogRef.current) { clearInterval(wsWatchdogRef.current); wsWatchdogRef.current = null; }
+    errorCountRef.current += 1;
+
+    if (errorCountRef.current <= 2) {
+      // 즉시 재연결 시도 (에러 UI 없이)
+      clearTimers();
+      if (!unmountedRef.current && connectRef.current) connectRef.current();
+      return;
+    }
+
+    // 3회 이상 연속 실패 → '연결 실패' 고정(자동 주기 재시도 없음).
+    // 재시도는 '재연결' 버튼 또는 새로고침(재마운트)으로만.
+    clearTimers();
+    setStreamUrl("");
+    setIsLoading(false);
+    setHasError(true);
+  }, [clearTimers]);
+
+  const connectThermal = useCallback(() => {
+    if (wsRef.current) { try { wsRef.current.close(); } catch {} wsRef.current = null; }
+    if (wsWatchdogRef.current) { clearInterval(wsWatchdogRef.current); wsWatchdogRef.current = null; }
+    // 마지막 프레임이 있으면(재연결) 로딩 오버레이 없이 직전 프레임 유지, 최초 연결이면 로딩 표시
+    if (!everFrameRef.current) setIsLoading(true);
+    setHasError(false);
+
+    const ws = new WebSocket(camera.webrtcUrl);
+    wsRef.current = ws;
+    lastFrameAtRef.current = Date.now();
+
+    timeoutRef.current = setTimeout(() => {
+      setIsLoading(false);
+      setHasError(true);
+      try { ws.close(); } catch {}
+    }, CAM_TIMEOUT_MS);
+
+    ws.onerror = () => onFail();
+    // 소켓이 (반)종료돼도 onerror가 안 뜰 수 있어 onclose에서도 재연결 처리
+    ws.onclose = () => {
+      if (wsRef.current === ws && !unmountedRef.current) onFail();
+    };
+    ws.onmessage = (e) => {
+      if (e.data instanceof Blob) {
+        lastFrameAtRef.current = Date.now();
+        everFrameRef.current = true;
+        onSuccess();
+        getSink().push(e.data);   // 최신 프레임만 합쳐 ~15fps로 렌더
+      }
+    };
+
+    // 프레임 watchdog — 새 프레임이 THERMAL_STALL_MS 동안 없으면(멈춤/half-open) 재연결한다.
+    // 마지막 프레임은 유지하므로 검은 화면 대신 직전 화면이 남는다.
+    wsWatchdogRef.current = setInterval(() => {
+      if (unmountedRef.current) return;
+      if (Date.now() - lastFrameAtRef.current > THERMAL_STALL_MS) onFail();
+    }, THERMAL_WATCHDOG_MS);
+  }, [onSuccess, onFail, getSink]);
+
+  const connectMjpeg = useCallback(() => {
+    if (wsRef.current) { wsRef.current.close(); wsRef.current = null; }
+    sinkRef.current?.reset();   // 열화상 → MJPEG 전환 시 대기 프레임·objectURL 정리
+    setIsLoading(true);
+    setHasError(false);
+
+    const raw = camera.webrtcUrl;
+    const base = raw.startsWith("ws") || raw.startsWith("http")
+      ? raw
+      : `${CAMERA_BASE}${raw}`;
+    // 작은 슬롯(lowRes)은 백엔드 RTSP 프록시에서 저해상도·저품질로 받아
+    // 인코딩 부하를 줄인다. rtsp(백엔드 프록시) 경로에만 적용.
+    const quality =
+      lowRes && (camera.streamType ?? "rtsp") === "rtsp" ? "&w=640&q=55" : "";
+    const url = base + (base.includes("?") ? "&" : "?") + "t=" + Date.now() + quality;
+
+    // 이전 img src를 해제하여 브라우저 연결을 끊고 새 URL 즉시 세팅 (M-5).
+    // src="" 만으로는 브라우저가 이전 MJPEG HTTP 스트림을 즉시 끊지 않을 수 있어
+    // removeAttribute까지 호출해 버려진 스트림이 누적되지 않도록 한다.
+    if (mjpegImgRef.current) {
+      try {
+        mjpegImgRef.current.src = "";
+        mjpegImgRef.current.removeAttribute("src");
+      } catch {}
+    }
+    setStreamUrl(url);
+
+    timeoutRef.current = setTimeout(() => {
+      errorCountRef.current += 1;
+      clearTimers();
+      // 첫 프레임 지연 — 2회까지는 조용히 재시도(스피너 유지), 그 이상만 에러 UI.
+      // (백엔드 프록시가 투명 재연결하므로 결국 프레임이 도착한다)
+      if (errorCountRef.current <= 2) {
+        if (!unmountedRef.current && connectRef.current) connectRef.current();
+        return;
+      }
+      setStreamUrl("");
+      setIsLoading(false);
+      setHasError(true);
+    }, CAM_TIMEOUT_MS);
+  }, [camera, clearTimers, lowRes]);
+
+  const connect = useCallback(() => {
+    clearTimers();
+    // 비활성(로봇 오프라인 등) — WS/타이머를 모두 정리하고 연결을 시도하지 않는다.
+    if (!enabled) {
+      if (wsRef.current) { try { wsRef.current.close(); } catch {} wsRef.current = null; }
+      if (wsWatchdogRef.current) { clearInterval(wsWatchdogRef.current); wsWatchdogRef.current = null; }
+      setStreamUrl("");
+      setIsLoading(false);
+      setHasError(false);
+      return;
+    }
+    if (isWebrtc) {
+      // RTSP 카메라는 WebRTCPlayer가 연결·재시도를 자체 처리 — MJPEG 타이머 불필요
+      setIsLoading(false);
+      setHasError(false);
+      return;
+    }
+    if (isThermal) connectThermal();
+    else connectMjpeg();
+  }, [enabled, isWebrtc, isThermal, connectThermal, connectMjpeg, clearTimers]);
+
+  // connectRef에 최신 connect 주입
+  useEffect(() => {
+    connectRef.current = connect;
+  }, [connect]);
+
+  // 초기 연결
+  useEffect(() => {
+    unmountedRef.current = false;
+    connect();
+    return () => {
+      unmountedRef.current = true;
+      clearTimers();
+      if (wsWatchdogRef.current) { clearInterval(wsWatchdogRef.current); wsWatchdogRef.current = null; }
+      if (wsRef.current) wsRef.current.close();
+      sinkRef.current?.reset();   // 대기 프레임·objectURL 정리 + thermalUrl(null)
+      if (mjpegImgRef.current) {
+        try {
+          mjpegImgRef.current.src = "";
+          mjpegImgRef.current.removeAttribute("src");
+        } catch {}
+      }
+      setStreamUrl("");
+      setThermalUrl(null);
+    };
+  }, [camera.id, enabled]);
+
+  const handleRetry = () => {
+    connect();
+  };
+
+  // mjpeg/열화상 스트림 표시 여부(WebRTC는 WebRTCPlayer가 자체 처리).
+  const mjpegStreaming = (isThermal ? !!thermalUrl : !!streamUrl) && !isLoading && !hasError;
+
+  return (
+    <div className={styles.slotContainer}>
+      {/* 스트림 상태(화면 축) — 문구는 streamStatusCopy 한 곳에서 관리 */}
+      {!isWebrtc && enabled && hasError && (
+        <div className={styles.errorOverlay}>
+          <svg className={styles.noSignalIcon} width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M23 7l-7 5 7 5V7z" /><rect x="1" y="5" width="15" height="14" rx="2" /><line x1="2" y1="2" x2="22" y2="22" />
+          </svg>
+          <span className={styles.msgAmber}>{STREAM_COPY.error.title}</span>
+          <span className={styles.overlayDesc}>{STREAM_COPY.error.desc}</span>
+          <button className={styles.retryBtn} onClick={handleRetry}>
+            {RETRY_LABEL}
+          </button>
+        </div>
+      )}
+      {!isWebrtc && enabled && !hasError && isLoading && (
+        hadFrame ? (
+          // 자동 복구 중 — 직전 프레임을 남겨두고 옅게 덮는다
+          <div className={styles.reconnectOverlay}>
+            <div className={`${styles.spinner} ${styles.spinnerWarn}`} />
+            <span className={styles.msgAmber}>{STREAM_COPY.recovering.title}</span>
+            <span className={styles.overlayDesc}>{STREAM_COPY.recovering.desc}</span>
+          </div>
+        ) : (
+          // 연결 중(최초)
+          <div className={styles.loadingOverlay}>
+            <div className={styles.spinner} />
+            <span>{STREAM_COPY.connecting.title}</span>
+          </div>
+        )
+      )}
+      {/* LIVE 배지(mjpeg/열화상) */}
+      {!isWebrtc && enabled && mjpegStreaming && (
+        <span className={styles.liveBadge}><span className={styles.liveDot} />{LIVE_LABEL}</span>
+      )}
+
+      {/* 스트림 */}
+      {isWebrtc ? (
+        <WebRTCPlayer
+          whepUrl={camera.webrtcUrl}
+          videoClassName={styles.cameraImg}
+          enabled={enabled}
+          disabledLabel="로봇 연결 끊김"
+        />
+      ) : isThermal && thermalUrl ? (
+        <img
+          src={thermalUrl}
+          className={styles.cameraImg}
+          alt="thermal"
+          onLoad={onSuccess}
+          onError={onFail}
+        />
+      ) : !isThermal && streamUrl ? (
+        <img
+          ref={mjpegImgRef}
+          src={streamUrl}
+          className={styles.cameraImg}
+          alt="mjpeg"
+          onLoad={onSuccess}
+          onError={onFail}
+        />
+      ) : null}
+
+      {/* 확장 아이콘 */}
+      {onExpand && (
+        <button className={styles.expandBtn} onClick={onExpand} aria-label="확대">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="15 3 21 3 21 9" />
+            <polyline points="9 21 3 21 3 15" />
+            <line x1="21" y1="3" x2="14" y2="10" />
+            <line x1="3" y1="21" x2="10" y2="14" />
+          </svg>
+        </button>
+      )}
+
+      {/* 카메라 이름(로봇 이름이 넘어오면 접두 표시) */}
+      {robotName && <div className={styles.robotLabel}>{robotName}</div>}
+      <div className={styles.slotLabel}>{camera.label}</div>
+    </div>
+  );
+}

@@ -1,0 +1,22 @@
+[Unit]
+Description=Robot control-network endpoint watchdog
+After=network-online.target receiver.service localization.service
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=root
+Environment=PYTHONUNBUFFERED=1
+Environment=ROBOT_IP=10.21.31.103
+Environment=RTSP_PORT=8554
+Environment=CHECK_SEC=10
+ExecStart=/usr/local/sbin/robot-network-watchdog
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=robot-network-watchdog
+
+[Install]
+WantedBy=multi-user.target

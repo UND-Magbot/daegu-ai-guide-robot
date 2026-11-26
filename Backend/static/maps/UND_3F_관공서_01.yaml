@@ -1,0 +1,6 @@
+image: /var/opt/robot/data/maps//UND_3F_관공서_01-20261028-105510/occ_grid.pgm
+resolution: 0.1
+origin: [-16.2, -23.8, 0.0]
+negate: 0
+occupied_thresh: 0.65
+free_thresh: 0.196

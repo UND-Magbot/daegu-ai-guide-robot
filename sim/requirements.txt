@@ -1,0 +1,10 @@
+# 시뮬 전용 가벼운 의존성. cv2·numpy·ultralytics·paramiko·jose 는 하네스가 빈 모듈로 막는다.
+sqlalchemy
+fastapi
+pydantic-settings>=2
+python-dotenv
+python-multipart
+passlib
+slowapi
+requests
+pymysql

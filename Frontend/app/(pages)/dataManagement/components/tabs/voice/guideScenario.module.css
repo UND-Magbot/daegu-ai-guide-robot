@@ -1,0 +1,544 @@
+/* 음성 관리 › 안내 시나리오(다단계). voice.module.css 의 표·버튼·배지를 그대로 쓰고
+   여기에는 이 화면에만 있는 것(시나리오 탭 · 세션 카드 · 단계 편집 행)만 둔다. */
+
+/* ── 시나리오 탭 ── */
+.tabs {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 12px;
+  flex-shrink: 0;
+}
+
+.tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 36px;
+  padding: 0 16px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  background: var(--surface-tab-inactive);
+  color: var(--text-tertiary);
+  font-size: var(--font-size-md);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.tab:hover {
+  color: var(--text-secondary);
+}
+
+.tabActive {
+  background: var(--surface-4);
+  border-color: var(--color-info-border);
+  color: var(--text-primary);
+}
+
+.tabOff {
+  font-size: var(--font-size-xs);
+  font-weight: 500;
+  color: var(--text-muted);
+}
+
+/* 미연결 단계 수 */
+.tabWarn {
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: var(--color-warning);
+  color: #1a1d2e;
+  font-size: var(--font-size-xs);
+  line-height: 18px;
+  text-align: center;
+}
+
+/* ── 세션 카드 ── */
+.sessionCard {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 14px 16px;
+  margin-bottom: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  background: var(--surface-2);
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+
+/* 운영자 입력을 기다리는 동안은 눈에 띄어야 한다 — 로봇과 고객이 멈춰 있다 */
+.sessionWaiting {
+  border-color: var(--color-warning);
+  box-shadow: 0 0 0 1px var(--color-warning) inset;
+}
+
+.sessionMain {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 1;
+  min-width: 0;
+}
+
+.sessionText {
+  font-size: var(--font-size-md);
+}
+
+.sessionInfo {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.sessionTitle {
+  font-size: var(--font-size-md);
+  color: var(--text-primary);
+}
+
+.sessionMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  font-size: var(--font-size-sm);
+  color: var(--text-tertiary);
+}
+
+.sessionMeta span {
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sessionActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.opInput {
+  width: 120px;
+  height: 36px;
+  padding: 0 10px;
+  border: 1px solid var(--color-warning);
+  border-radius: 6px;
+  background: var(--surface-input);
+  color: var(--text-primary);
+  font-size: var(--font-size-md);
+}
+
+.opInput:focus {
+  outline: none;
+  border-color: var(--color-info);
+}
+
+.badgeWait {
+  background: var(--color-warning);
+  color: #1a1d2e;
+}
+
+/* ── 시나리오 설정 ── */
+.settings {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 10px;
+  flex-shrink: 0;
+}
+
+.settingLabel {
+  font-size: var(--font-size-base);
+  color: var(--text-tertiary);
+  white-space: nowrap;
+}
+
+/* ── 단계 표 ── */
+.tableWrap {
+  margin-top: 10px;
+  overflow: auto;
+  max-height: calc(var(--content-height) - 360px);
+  min-height: 240px;
+}
+
+.tableWrap::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+
+.tableWrap::-webkit-scrollbar-thumb {
+  background: var(--surface-5);
+  border-radius: 2px;
+}
+
+.sayCell {
+  line-height: 1.5;
+  color: var(--text-primary);
+}
+
+.flow {
+  font-size: var(--font-size-sm);
+  color: var(--text-tertiary);
+  line-height: 1.5;
+}
+
+.intent {
+  margin-top: 3px;
+  font-size: var(--font-size-xs);
+  color: var(--text-muted);
+}
+
+.muted {
+  color: var(--text-muted);
+}
+
+.wait {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: var(--font-size-sm);
+  white-space: nowrap;
+  background: var(--surface-button);
+  color: var(--text-tertiary);
+}
+
+.wait_user {
+  background: var(--color-info-bg);
+  color: var(--text-primary);
+}
+
+.wait_operator {
+  background: var(--color-warning);
+  color: #1a1d2e;
+  font-weight: 600;
+}
+
+.wait_arrival {
+  background: #2568a8;
+  color: #dceeff;
+}
+
+.badgeMissing {
+  background: var(--color-warning);
+  color: #1a1d2e;
+}
+
+/* ── 단계 편집 행 ── */
+.editRow td {
+  background: var(--surface-4) !important;
+  vertical-align: top;
+}
+
+.editGrid {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 4px 0;
+}
+
+.sayInput {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 6px;
+  background: var(--surface-input);
+  color: var(--text-primary);
+  font-size: var(--font-size-md);
+  line-height: 1.5;
+  resize: vertical;
+  font-family: inherit;
+}
+
+.sayInput:focus {
+  outline: none;
+  border-color: var(--color-info);
+}
+
+.tokens {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.len {
+  margin-left: auto;
+  font-size: var(--font-size-sm);
+  color: var(--text-muted);
+}
+
+.editFields {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+/* 라벨은 가로로 둔다. CustomSelect 는 width 를 flex-basis 로도 거는데, 세로 flex 안에서는
+   그게 '높이'가 되어 트리거가 200px 로 늘고 드롭다운이 그 아래에 떨어져 뜬다. */
+.editFields label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--font-size-sm);
+  color: var(--text-tertiary);
+  white-space: nowrap;
+}
+
+.editFields input[type="number"] {
+  width: 90px;
+  height: 36px;
+  padding: 0 8px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 6px;
+  background: var(--surface-input);
+  color: var(--text-primary);
+}
+
+/* 로봇 맵이 시나리오 맵과 다를 때 — 시작 버튼 옆에서 미리 알린다 */
+.mapWarn {
+  font-size: var(--font-size-sm);
+  color: var(--color-warning);
+  line-height: 1.5;
+}
+
+/* ── 안내 시작 창 — 호출 위치 선택 ── */
+.startPick {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.startHint {
+  margin: 10px 0 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-warning);
+  line-height: 1.5;
+}
+
+/* ── 구간 테스트 — 단계 선택 줄과 미리 넣을 값 줄을 세로로 쌓는다 ── */
+.segmentCard {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+}
+
+.segmentRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+
+.testBadge {
+  margin-left: 8px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: var(--font-size-xs, 11px);
+  color: var(--color-info, #60a5fa);
+  border: 1px solid currentColor;
+}
+
+/* ── 층 이동(엘리베이터 사전 전환 · 도착 후 위치 재조정) ── */
+.floorMove {
+  border-color: rgba(96, 165, 250, 0.35);
+  justify-content: space-between;
+}
+
+/* ── 도착 후 보행 유지 토글 ── */
+.keepGaitRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 14px;
+  margin: -6px 0 14px;
+}
+
+.keepGaitHint {
+  font-size: var(--font-size-sm);
+  color: var(--text-tertiary);
+}
+
+/* ── 안내 사전 주행 — 진행 카드: 위 줄(상태·버튼) + 아래 경로 칩 ── */
+.prerunCard {
+  flex-wrap: wrap;
+}
+
+.prerunFailed {
+  border-color: #ef4444;
+  box-shadow: 0 0 0 1px #ef4444 inset;
+}
+
+.badgeRun {
+  background: var(--color-info);
+  color: #fff;
+}
+
+.badgeFail {
+  background: #ef4444;
+  color: #fff;
+}
+
+.prerunReason {
+  font-size: var(--font-size-sm);
+  color: #ff8a8a;
+  line-height: 1.5;
+}
+
+.prerunBar {
+  flex: 1 1 100%;
+  height: 4px;
+  border-radius: 4px;
+  background: var(--surface-input);
+  overflow: hidden;
+}
+
+.prerunBar > i {
+  display: block;
+  height: 100%;
+  background: var(--color-info);
+}
+
+.prerunRoute {
+  display: flex;
+  flex: 1 1 100%;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding-top: 10px;
+  border-top: 1px dashed rgba(255, 255, 255, 0.14);
+  font-size: var(--font-size-sm);
+}
+
+.prerunArrow {
+  color: var(--text-tertiary);
+}
+
+.prerunStop {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 999px;
+  color: var(--text-tertiary);
+}
+
+.prerunStop small {
+  font-size: var(--font-size-xs, 11px);
+  opacity: 0.8;
+}
+
+.prerunStop_done {
+  border-color: rgba(29, 140, 107, 0.6);
+  background: rgba(29, 140, 107, 0.15);
+  color: #d4fff0;
+}
+
+.prerunStop_current {
+  border-color: var(--color-info);
+  color: var(--text-primary);
+}
+
+.prerunStop_wait {
+  border-color: var(--color-warning);
+  background: var(--color-warning);
+  color: #1a1d2e;
+}
+
+.prerunStop_error {
+  border-color: #ef4444;
+  background: #ef4444;
+  color: #fff;
+}
+
+/* 안내 시작 창 — 사전 주행 경로 미리 보기 */
+.prerunPreview {
+  margin: 10px 0 0;
+  font-size: var(--font-size-sm);
+  color: var(--text-secondary);
+  line-height: 1.6;
+  text-align: left;
+}
+
+.prerunPreview b {
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+/* 1회 주행 — 갈 곳 고르기 창(GuidePrerunPickModal) */
+.pickMeta {
+  margin-bottom: 10px;
+  font-size: var(--font-size-sm);
+  color: var(--text-muted);
+}
+
+.pickList {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 46vh;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.pickRow {
+  border-radius: 6px;
+}
+
+.pickRow:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.pickRowOff .pickName,
+.pickRowOff .pickNo {
+  color: var(--text-muted);
+}
+
+.pickLabel {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+}
+
+.pickNo {
+  min-width: 22px;
+  color: var(--text-secondary);
+}
+
+.pickName {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.pickStep {
+  font-family: var(--font-mono, monospace);
+  font-size: var(--font-size-xs);
+  color: var(--text-muted);
+}
+
+.pickTag {
+  margin-left: auto;
+  padding: 1px 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  font-size: var(--font-size-xs);
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.pickSummary {
+  margin-top: 12px;
+  font-size: var(--font-size-sm);
+  color: var(--text-secondary);
+  line-height: 1.5;
+}

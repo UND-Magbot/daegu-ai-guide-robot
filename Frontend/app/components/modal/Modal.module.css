@@ -1,0 +1,4125 @@
+.mb10 {
+  margin-bottom: 10px;
+}
+
+.mb20 {
+  margin-bottom: 20px;
+}
+
+.mt50 {
+  margin-top: 50px;
+}
+
+.textCenter {
+  text-align: center;
+}
+
+/* 모달 css */
+.modalOverlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 100;
+  animation: fadeIn 0.2s ease-in;
+  padding: 20px;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.modalContent {
+  width: min(70vw, calc(100vw - 40px));
+  max-width: 1344px;
+  height: auto;
+  background: var(--surface-0);
+  border-radius: 16px;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.6);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  position: relative;
+  overflow: hidden;
+  padding: 25px;
+}
+
+.remonteModalContent,
+.remoteModalContent {
+  width: min(1100px, calc(100vw - 40px));
+  height: min(761px, calc(100vh - 40px));
+
+  padding: 20px 24px;
+
+  background: var(--surface-3);
+  border-radius: 23px;
+
+  box-shadow: 10px 12px 20px rgba(0, 0, 0, 0.4);
+
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.modalTopDiv {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+
+  margin-bottom: 10px;
+  flex-shrink: 0;
+}
+
+.modalTitle {
+  display: flex;
+  align-items: center;
+}
+
+
+.modalTitle img {
+  width: var(--icon-lg);
+  height: var(--icon-lg);
+  margin-right: 10px;
+}
+
+.modalTitle div {
+  font-size: var(--font-size-2xl);
+  font-weight: 600;
+}
+
+.modalTitle div span {
+  font-size: var(--font-size-sm);
+  color: var(--text-tertiary);
+  font-weight: 400;
+  margin-left: 6px;
+}
+
+.modalTopRight {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.workStart {
+  height: 32px;
+  padding: 0 14px;
+  font-size: var(--font-size-sm);
+  font-weight: 500;
+  border: 1px solid var(--border-subtle);
+  color: var(--text-primary);
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  white-space: nowrap;
+}
+
+.workStart:hover {
+  background: var(--surface-5);
+  border-color: var(--text-primary);
+}
+
+.workStart:active {
+  transform: scale(0.97);
+}
+
+.workStop {
+  height: 32px;
+  padding: 0 14px;
+  font-size: var(--font-size-sm);
+  font-weight: 500;
+  border: 1px solid #e53935;
+  color: #fff;
+  border-radius: 6px;
+  background: #e53935;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  white-space: nowrap;
+}
+
+.workStop:hover {
+  background: #c62828;
+  border-color: #c62828;
+}
+
+.workStop:active {
+  transform: scale(0.97);
+}
+
+/* ── 작업 시작 팝오버 ── */
+.workPopover {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  min-width: 200px;
+  background: var(--surface-2, #1e1e2e);
+  border: 1px solid var(--border-subtle, #333);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  z-index: 10;
+  padding: 6px 0;
+}
+
+.workPopoverItem {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 8px 14px;
+  font-size: var(--font-size-sm, 13px);
+  color: var(--text-primary, #e0e0e0);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  transition: background 0.12s;
+}
+
+button.workPopoverItem:hover {
+  background: var(--surface-5, rgba(255, 255, 255, 0.08));
+}
+
+.workPopoverDivider {
+  height: 1px;
+  background: var(--border-subtle, #333);
+  margin: 4px 0;
+}
+
+.loopInputRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.loopInput {
+  width: 52px;
+  height: 26px;
+  padding: 0 6px;
+  font-size: 12px;
+  text-align: center;
+  border: 1px solid var(--border-subtle, #444);
+  border-radius: 4px;
+  background: var(--surface-1, #161622);
+  color: var(--text-primary, #e0e0e0);
+  outline: none;
+}
+
+.loopInput:focus {
+  border-color: var(--accent, #5b8def);
+}
+
+.loopStartBtn {
+  height: 26px;
+  padding: 0 10px;
+  font-size: 12px;
+  font-weight: 500;
+  border: none;
+  border-radius: 4px;
+  background: var(--accent, #5b8def);
+  color: #fff;
+  cursor: pointer;
+  transition: background 0.12s;
+}
+
+.loopStartBtn:hover {
+  background: #4a7cde;
+}
+
+.closeBtn {
+    width: 32px;
+    height: 32px;
+    line-height: 32px;
+    border: none;
+    color: var(--text-secondary);
+    background: transparent;
+    font-size: var(--font-size-xl);
+    cursor: pointer;
+    border-radius: 6px;
+    transition: background 0.15s ease, color 0.15s ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.closeBtn:hover {
+    background: var(--surface-elevated);
+    color: var(--text-primary);
+}
+
+.cameraView {
+  margin-top: 0;
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  flex: 1;
+  min-height: 0;
+}
+
+.topPosition {
+  position: absolute;
+  top: 12px;
+  left: 14px;
+  right: 14px;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* 실제 스크롤 영역: 네이티브 스크롤바는 숨김 */
+.inner {
+  max-height: inherit;
+  overflow-y: scroll;
+  padding-right: 3px; /* 오른쪽 커스텀 스크롤바 공간 */
+  padding-bottom: 0;
+  box-sizing: border-box;
+
+  /* 스크롤바 숨김(네이티브) */
+  scrollbar-width: none; /* Firefox */
+}
+.inner::-webkit-scrollbar {
+  display: none; /* Chrome/Edge */
+}
+
+.scrollTrack {
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  right: 3px;
+
+  width: 2px;
+  border-radius: 50px;
+  background:transparent;
+}
+
+/* 썸(움직이는 막대) */
+.scrollThumb {
+  position: absolute;
+  top: 0;
+  left: 0;
+
+  width: 100%;
+  height: 50%;            /* JS가 동적으로 조절 */
+  border-radius: 50px;
+  background: #EAEAED;     /* 요청 색상 */
+}
+
+
+.customSelectBox {
+  position: absolute;
+  top: 20px;
+  left: 20px;
+  width: 150px;
+}
+
+.modalCamSeletWrapper {
+  position: relative;
+  z-index: 10;
+  min-width: 140px;
+}
+
+.modalCamSelect {
+  width: 100%;
+  height: 30px;
+  padding: 0 10px 0 12px;
+
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.4);
+  backdrop-filter: blur(6px);
+  border: 1px solid var(--border-subtle);
+  font-size: var(--font-size-sm);
+  color: var(--text-primary);
+
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  white-space: nowrap;
+
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.modalCamSelect:hover {
+  border-color: var(--color-info);
+  background: rgba(0, 0, 0, 0.55);
+}
+
+.modalCamSelect img {
+  width: 12px;
+  height: auto;
+  opacity: 0.7;
+}
+
+.modalCamSeletbox {
+  width: 100%;
+  height: auto;
+  max-height: 102px; /* 아이템 30px × 3 + padding 12px */
+  font-size: var(--font-size-sm);
+
+  padding: 6px;
+  background: var(--surface-4);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 10;
+  overflow-y: auto;
+  scrollbar-width: none;
+  cursor: pointer;
+}
+
+.modalCamSeletbox::-webkit-scrollbar {
+  display: none;
+}
+
+.modalCamSeletbox div {
+  width: 100%;
+  height: 30px;
+  line-height: 30px;
+  padding: 0 6px;
+  border-radius: 6px;
+  color: var(--text-secondary);
+  transition: background 0.15s ease;
+}
+
+.modalCamSeletbox div:hover {
+  background: var(--surface-elevated);
+  color: var(--text-primary);
+}
+
+.cameraView .video-box {
+  width: 100%;
+  height: 100%;
+
+  position: relative;
+  overflow: hidden;
+
+  border-radius: 15px;
+  border: 1px solid var(--border-subtle);
+}
+
+.topRightPostion {
+  margin-left: auto;
+}
+
+.topRightIcon {
+  display: flex;
+  align-items: center;
+  font-size: var(--font-size-sm);
+  gap: 8px;
+  justify-content: center;
+}
+
+.robotStatus {
+  display: flex;
+  align-items: center;
+  font-weight: 500;
+  font-size: var(--font-size-xs);
+  height: 30px;
+  padding: 0 10px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.4);
+  backdrop-filter: blur(6px);
+  border: 1px solid var(--border-subtle);
+  gap: 6px;
+}
+
+.robotStatus img {
+  width: var(--icon-sm);
+}
+
+.batteryLow {
+  color: var(--color-error-soft);
+  border-color: var(--color-error-soft);
+}
+
+.middlePosition {
+  position: absolute;
+  bottom: 235px;
+  right: 35px;
+}
+
+.middleBtnTotal {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.floorFlex {
+  width: 270px;
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap-reverse;
+  justify-content: flex-start;
+  text-align: center;
+  font-size: var(--font-size-md);
+  gap: 5px;
+
+  text-align: center;
+  font-size: var(--font-size-md);
+}
+
+.floorFlex div {
+  flex-grow: 0;
+  flex-shrink: 0;
+  flex-basis: calc(250px / 5);
+  height: 30px;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 5px;
+}
+
+.floorFlex div.active {
+  background: #e46463;
+}
+
+.floorGrid div {
+  width: calc(100% / 6);
+  line-height: 30px;
+  border: 1px solid #fff;
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.floorGrid div:hover {
+  background: var(--color-error-hover);
+}
+
+.bottomPosition {
+  width: 100%;
+  height: 167px;
+  flex-shrink: 0;
+  font-family: 'Pretendard', 'Noto Sans', sans-serif;
+  font-size: var(--font-size-sm);
+  color: var(--text-primary);
+}
+
+.bottomFlex {
+  display: flex;
+  justify-content: space-between;
+
+  width: 100%;
+
+  margin-top: 10px;
+}
+/*
+.modeBox {
+  width: 20%;
+}
+
+.viewBtn {
+  width: 15%;
+} */
+
+.middleBtnBottom {
+  width: 544px;
+  height: 77px;
+
+  padding: 11px 13px;
+
+  border-radius: 10px;
+
+  background: var(--surface-mode);
+}
+
+.viewBox {
+  width: 291px;
+  aspect-ratio: 16 / 9;
+
+  border: 1px solid var(--border-subtle);
+
+  border-radius: 11px;
+  position: relative;
+  transition: border-color 0.2s ease;
+}
+
+
+.viewBox video {
+  width: 100%;
+  height: 200px;
+  border: 1px solid #fff;
+  border-radius: 15px;
+  box-shadow: 4px 4px 8px rgba(0, 0, 0, 0.5);
+  position: relative;
+}
+
+.Floors {
+  height: 22px;
+  line-height: 22px;
+  padding: 0 8px;
+
+  font-size: var(--font-size-xs);
+  font-weight: 500;
+  text-align: center;
+
+  border-radius: 4px;
+
+  background: rgba(0, 0, 0, 0.45);
+  color: var(--text-primary);
+
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 5;
+}
+
+.pipLabel {
+  height: 22px;
+  line-height: 22px;
+  padding: 0 8px;
+
+  font-size: var(--font-size-xs);
+  font-weight: 500;
+
+  border-radius: 4px;
+
+  background: rgba(0, 0, 0, 0.45);
+  color: var(--text-secondary);
+
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 5;
+}
+
+.pipLoadingOverlay {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--surface-2);
+  border-radius: 11px;
+}
+
+.pipLoadingSpinner {
+  width: 20px;
+  height: 20px;
+  border: 2px solid var(--surface-5);
+  border-top-color: var(--color-info);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+.pipErrorOverlay {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--surface-1);
+  border-radius: 11px;
+}
+
+.pipErrorText {
+  font-size: var(--font-size-xs);
+  font-weight: 500;
+  color: var(--text-tertiary);
+}
+
+.viewExchangeBtn {
+  width: 28px;
+  height: 28px;
+  padding: 5px;
+
+  background: rgba(0, 0, 0, 0.45);
+
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 6px;
+
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  z-index: 5;
+
+  cursor: pointer;
+  transition: background 0.2s ease, transform 0.15s ease;
+}
+
+.viewExchangeBtn:hover {
+  background: var(--color-info);
+  border-color: var(--color-info);
+  transform: scale(1.1);
+}
+
+.viewExchangeBtn img {
+  width: 100%;
+}
+
+.mapViewExchangeBtn {
+  background: #727489;
+}
+
+.camViewExchangeBtn {
+  background: #ffffff;
+}
+
+.modeBtnCommonBox {
+  width: 267px;
+  height: 77px;
+  padding: 11px 13px;
+
+  background: var(--surface-mode);
+
+  border-radius: 10px;
+
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+
+.modeBtnCommonBox > div:first-child {
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  color: var(--text-secondary);
+  letter-spacing: 0.5px;
+}
+
+.standSitBtn,
+.speedBtn,
+.camBtn {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+.zoomBtnBox {
+  position: absolute;
+  bottom: 14px;
+  right: 14px;
+
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+/* === Camera Loading Overlay === */
+.cameraLoadingOverlay {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  background: linear-gradient(90deg, var(--surface-2) 25%, var(--surface-4) 50%, var(--surface-2) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s ease-in-out infinite;
+  border-radius: 15px;
+}
+
+@keyframes shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+.cameraLoadingSpinner {
+  width: 36px;
+  height: 36px;
+  border: 3px solid var(--surface-5);
+  border-top-color: var(--color-info);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.cameraLoadingText {
+  font-size: var(--font-size-sm);
+  color: var(--text-tertiary);
+  font-weight: 400;
+}
+
+/* === Camera Error Overlay === */
+.cameraErrorOverlay {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: var(--surface-1);
+  border-radius: 15px;
+}
+
+.cameraErrorIcon {
+  font-size: 42px;
+  opacity: 0.5;
+  margin-bottom: 4px;
+}
+
+.cameraErrorTitle {
+  font-size: var(--font-size-xl);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.cameraErrorDesc {
+  font-size: var(--font-size-sm);
+  color: var(--text-tertiary);
+  font-weight: 400;
+}
+
+.cameraRetryBtn {
+  margin-top: 12px;
+  width: 120px;
+  height: 36px;
+  border-radius: 8px;
+  border: 1px solid var(--border-default);
+  background: var(--surface-4);
+  color: var(--text-primary);
+  font-size: var(--font-size-md);
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.cameraRetryBtn:hover {
+  background: var(--surface-elevated);
+}
+
+.cameraRetryBtn:active {
+  transform: scale(0.97);
+}
+
+/* === Video Wrapper (replaces inline styles) === */
+.videoWrapper {
+  width: 100%;
+  height: 100%;
+  position: relative;
+  overflow: hidden;
+  user-select: none;
+  touch-action: none;
+}
+
+.videoWrapperMap {
+  background: rgb(128, 128, 128);
+}
+
+.videoWrapperCameraZoomed {
+  cursor: grab;
+}
+
+.videoWrapperCameraPanning {
+  cursor: grabbing;
+}
+
+/* === Overlay Visibility (loading-dependent) === */
+.overlayVisible {
+  opacity: 1;
+  transition: opacity 0.3s ease;
+  pointer-events: auto;
+}
+
+.overlayHidden {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.zoomBtn {
+  width: 34px;
+  height: 34px;
+
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 8px;
+
+  background: rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(6px);
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  cursor: pointer;
+  transition: background 0.15s ease, transform 0.1s ease;
+}
+
+.zoomBtn:hover {
+  background: rgba(0, 0, 0, 0.65);
+}
+
+.zoomBtn:active {
+  transform: scale(0.93);
+}
+
+.zoomBtn img {
+  width: var(--icon-sm);
+  height: var(--icon-sm);
+}
+
+.zoomResetBtn {
+  width: 34px;
+  height: 24px;
+
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+
+  background: var(--surface-4);
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  color: var(--text-primary);
+
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.zoomResetBtn:hover {
+  background: var(--surface-elevated);
+}
+
+.standSitBtn {
+  margin-right: 10px;
+}
+
+.standSitBtn div {
+  width: 117px;
+  height: 29px;
+  line-height: 29px;
+
+  border-radius: 5px;
+  border: 1px solid var(--border-subtle);
+
+  text-align: center;
+  font-size: var(--font-size-sm);
+  font-weight: 500;
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: background 0.15s ease, transform 0.1s ease;
+}
+
+.standSitBtn div:active {
+  transform: scale(0.95);
+}
+
+.speedBtn div {
+  width: 72px;
+  height: 29px;
+  line-height: 29px;
+
+  border-radius: 5px;
+  border: 1px solid var(--border-subtle);
+
+  text-align: center;
+  font-size: var(--font-size-sm);
+  font-weight: 500;
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: background 0.15s ease, transform 0.1s ease;
+}
+
+.speedBtn div:active {
+  transform: scale(0.95);
+}
+
+.middleBtnTop {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.freshBtnTitle {
+  margin-bottom: 12px;
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  color: var(--text-secondary);
+  letter-spacing: 0.5px;
+}
+
+.freshBtnSubtitle {
+  margin-right: 18px;
+
+  font-size: var(--font-size-sm);
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.freshBtnFlex {
+  display: flex;
+  align-items: center;
+}
+
+.freshOn,
+.freshOff {
+  transition: background 0.15s ease;
+}
+
+.freshOn.active {
+  background: var(--color-success-active);
+}
+
+.freshOff.active {
+  background: var(--color-error-hover);
+}
+
+.freshBtn div {
+  width: 92px;
+  height: 29px;
+  line-height: 29px;
+
+  border-radius: 5px;
+  border: 1px solid var(--border-subtle);
+
+  text-align: center;
+  font-size: var(--font-size-sm);
+  font-weight: 500;
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: background 0.15s ease, transform 0.1s ease;
+}
+
+.freshBtn div:active {
+  transform: scale(0.95);
+}
+
+.freshBtnMr8 {
+  margin-right: 8px;
+}
+
+.freshBtnFront {
+  margin-right: 40px;
+}
+
+.camBtn div,
+.zoomBtn div {
+  height: 28px;
+  border: 1px solid #fff;
+  line-height: 28px;
+  text-align: center;
+  border-radius: 5px;
+  font-size: var(--font-size-md);
+  cursor: pointer;
+}
+
+.standSitBtn div:hover,
+.speedBtn div:hover,
+.camBtn div:hover,
+.camBtn div.active,
+.zoomBtn div:hover {
+  background: #808291;
+}
+
+.camBtn div,
+.zoomBtn div {
+  width: 48%;
+}
+
+
+.powerBtn {
+  width: 10%;
+}
+
+.powerImg {
+  width: 60px;
+  height: 60px;
+  border-radius: 50px;
+  background: #79b883;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #fff;
+  margin: 0 auto;
+  cursor: pointer;
+}
+
+.powerImg:hover,
+.powerImg:focus {
+  background: var(--color-error-hover);
+}
+
+.powerBtn img {
+  height: 33px;
+}
+
+.mapCategoryTitle {
+    color: #3c3c51;
+}
+
+.categoryTitle {
+    color: var(--text-primary);
+}
+
+.mapStandSitBtn div,
+.mapSpeedBtn div,
+.mapCamBtn div,
+.mapZoomBtn div,
+.mapFloorLine div,
+.mapPowerImg {
+  border: 1px solid #26273a;
+  color: #3c3c51;
+}
+
+.mapStandSitBtn div:hover,
+.mapSpeedBtn div:hover,
+.mapZoomBtn div:hover,
+.mapCamBtn div:hover,
+.mapCamBtn div.active {
+  background: #808291;
+  color: var(--text-primary);
+}
+
+.floorLine div {
+  border: 1px solid rgba(255, 255, 255);
+  color: var(--text-primary);
+}
+
+
+/* Robot Detail Modal */
+
+.insertModalContent {
+  width: 780px;
+  max-height: calc(100vh - 40px);
+
+  background: var(--surface-3);
+
+  border-radius: 16px;
+
+  position: relative;
+  overflow-y: auto;
+  padding: 24px;
+}
+
+.insertCloseBtn {
+  width: 32px;
+  height: 32px;
+
+  border: none;
+
+  color: white;
+  background: transparent;
+  font-size: var(--font-size-lg);
+  line-height: 1;
+
+  cursor: pointer;
+
+  position: absolute;
+  top: 24px;
+  right: 28px;
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  transition: background 0.15s ease;
+}
+
+.insertCloseBtn:hover {
+  background: var(--surface-elevated);
+}
+
+.insertTitle {
+  display: flex;
+  align-items: center;
+
+  margin-bottom: 16px;
+}
+
+.insertTitle img {
+  width: var(--icon-xl);
+  height: var(--icon-xl);
+  object-fit: contain;
+
+  margin-right: 10px;
+}
+
+.insertTitle h2 {
+  font-weight: 600;
+  font-size: var(--font-size-2xl);
+  margin: 0;
+  color: var(--text-primary);
+  line-height: 1;
+}
+
+.itemBoxContainer {
+  width: 100%;
+
+  border-radius: 16px;
+  background: var(--surface-5);
+
+  padding: 20px 24px;
+
+  margin-top: 16px;
+
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  column-gap: 24px;
+  row-gap: 0;
+}
+
+.insertItemBox {
+  width: 100%;
+
+  padding: 6px 0;
+
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.insertItemLabel {
+  font-size: var(--font-size-md);
+  line-height: 28px;
+  flex-shrink: 0;
+}
+
+.batteryCurrentValue {
+  font-weight: 600;
+  color: var(--color-info);
+  margin-left: 6px;
+}
+
+
+.insertItemBox input[type="text"] {
+  width: 100%;
+  height: 36px;
+  border-radius: 6px;
+  padding: 5px 10px;
+  border: 1px solid var(--border-default);
+  background: var(--surface-input);
+  color: var(--text-primary);
+  font-size: var(--font-size-sm);
+}
+
+.insertItemBox input[type="text"]:focus {
+  outline: none;
+  border-color: var(--color-info);
+}
+
+.insertItemBox input[type="text"]::placeholder,
+.insertItemBox textarea::placeholder {
+  color: var(--text-tertiary);
+  font-size: var(--font-size-sm);
+  font-weight: 300;
+}
+
+/* 입력 필드 에러 상태 */
+.insertItemBox input[type="text"].inputError,
+.insertItemBox .inputError {
+  border-color: var(--color-error-soft);
+}
+
+.insertItemBox input[type="text"].inputError:focus {
+  border-color: var(--color-error-soft);
+}
+
+/* 에러 메시지 */
+.errorMessage {
+  color: var(--color-error-soft);
+  font-size: var(--font-size-xs);
+  margin-top: 4px;
+}
+
+/* ── 커스텀 Select (로봇 등록 모달) ── */
+.customSelectWrap {
+  position: relative;
+}
+
+.customSelectTrigger {
+  width: 100%;
+  height: 36px;
+  border-radius: 6px;
+  padding: 0 10px;
+  border: 1px solid var(--border-default);
+  background: var(--surface-input);
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  text-align: left;
+  transition: border-color 0.15s;
+}
+
+.customSelectTrigger:hover {
+  border-color: var(--text-tertiary);
+}
+
+.customSelectTrigger:focus {
+  outline: none;
+  border-color: var(--color-info);
+}
+
+.customSelectTrigger.inputError {
+  border-color: var(--color-error-soft);
+}
+
+.customSelectArrow {
+  width: 12px;
+  height: 12px;
+  object-fit: contain;
+  margin-left: 8px;
+  opacity: 0.6;
+}
+
+.customSelectDropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 100;
+  background: var(--surface-3);
+  border: 1px solid var(--border-default);
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+.customSelectItem {
+  padding: 8px 12px;
+  font-size: var(--font-size-sm);
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: background 0.1s;
+}
+
+.customSelectItem:hover {
+  background: var(--surface-elevated);
+}
+
+.customSelectItemActive {
+  background: var(--color-info-bg);
+  color: var(--text-primary);
+}
+
+.customSelectItemDisabled {
+  opacity: 0.35;
+  cursor: default;
+  pointer-events: none;
+}
+
+/* 필수 마크 */
+.requiredMark {
+  color: var(--color-error-soft);
+  margin-left: 2px;
+}
+
+/* input + 에러 메시지 래퍼 */
+.insertInputWrap {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+}
+
+.batterySliderWrap {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.batterySliderTrackArea {
+  height: 20px;
+  display: flex;
+  align-items: center;
+  position: relative;
+  overflow: visible;
+}
+
+/* range 기본 스타일 제거 */
+.batterySlider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 4px;
+  border-radius: 999px;
+  outline: none;
+  cursor: pointer;
+  border: none;
+  padding: 0;
+
+  /* 중요: 활성(왼쪽) / 비활성(오른쪽) 분기 */
+  background: linear-gradient(
+    to right,
+    #79C9F2 0%,
+    #79C9F2 var(--percent),
+    #7B7F8D var(--percent),
+    #7B7F8D 100%
+  );
+}
+
+/* Webkit track */
+.batterySlider::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 999px;
+  background: transparent;
+  border: none;
+}
+
+/* Webkit thumb */
+.batterySlider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #79C9F2;
+
+  box-shadow: 0 0 0 3px rgba(121, 201, 242, 0.18);
+  border: none;
+  margin-top: -5px;
+}
+
+/* Firefox thumb */
+.batterySlider::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #79C9F2;
+  border: none;
+  box-shadow: 0 0 0 3px rgba(121, 201, 242, 0.18);
+}
+
+/* Firefox track 색이 별도라서 투명 처리 후 input background를 사용 */
+.batterySlider::-moz-range-track {
+  background: transparent;
+}
+
+/* 라벨: 좌/우 끝 정렬 */
+.batterySliderLabels {
+  display: flex;
+  justify-content: space-between;
+  font-size: var(--font-size-sm);
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.insertConfrimBtn {
+  width: 110px;
+  height: 40px;
+
+  border: none;
+  border-radius: 9px;
+
+  margin-top: 20px;
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+
+  cursor: pointer;
+  color: var(--text-primary);
+  font-size: var(--font-size-md);
+  transition: background 0.15s ease, opacity 0.15s ease;
+}
+
+.insertConfrimBtn:disabled {
+  cursor: not-allowed;
+}
+
+/* 비활성화 스타일 */
+.btnDisabled {
+  opacity: 0.45;
+  cursor: default !important;
+}
+
+/* 로딩 스피너 */
+.btnSpinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+  margin-right: 6px;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.insertConfrimBtn img {
+  width: 10px;
+  height: 10px;
+}
+
+.btnTotal {
+  display: flex;
+  width: 100%;
+  justify-content: flex-end;
+  margin-top: 35px;
+}
+
+.detailModalContent {
+  width: min(720px, 95vw);
+
+  background: var(--surface-3);
+  border-radius: 16px;
+  position: relative;
+  overflow: hidden;
+
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── 모달 Header ── */
+.detailHeader {
+  padding: 14px 24px 10px;
+  flex-shrink: 0;
+}
+
+.detailHeaderTop {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.detailHeaderTop h2 {
+  font-weight: 600;
+  font-size: var(--font-size-xl);
+  color: var(--text-primary);
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.detailHeaderTop h2 img {
+  width: var(--icon-lg);
+  height: var(--icon-lg);
+}
+
+.detailHeaderBtns {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.detailEditBtn {
+  width: 30px;
+  height: 30px;
+  border: none;
+  color: var(--text-secondary);
+  background: transparent;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  flex-shrink: 0;
+}
+
+.detailEditBtn:hover {
+  background: var(--color-info-bg, rgba(0, 176, 238, 0.12));
+  color: var(--color-info);
+}
+
+.detailCloseBtn {
+  width: 30px;
+  height: 30px;
+  border: none;
+  color: var(--text-secondary);
+  background: transparent;
+  border-radius: 6px;
+  font-size: var(--font-size-lg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  flex-shrink: 0;
+}
+
+.detailCloseBtn:hover {
+  background: var(--surface-elevated);
+  color: var(--text-primary);
+}
+
+/* 조회/수정 모드 탭 */
+.detailModeTabs {
+  display: flex;
+  gap: 4px;
+  background: var(--surface-2);
+  border-radius: 8px;
+  padding: 3px;
+  width: fit-content;
+}
+
+.detailModeTab {
+  padding: 5px 16px;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: var(--font-size-sm);
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.detailModeTab:hover {
+  color: var(--text-tertiary);
+}
+
+.detailModeTabActive {
+  background: var(--surface-3);
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+/* ── 모달 Body ── */
+.detailBody {
+  padding: 10px 24px 14px;
+}
+
+/* ── 모달 Footer ── */
+.detailFooter {
+  padding: 4px 24px 14px;
+  flex-shrink: 0;
+}
+
+.detailFooterActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 4px;
+}
+
+.detailFooterActions button {
+  min-width: 80px;
+}
+
+/* 하위 호환: 기존 detailTitle 사용처 대비 */
+.detailTitle {
+  display: flex;
+  align-items: center;
+}
+
+.detailTitle img {
+  width: var(--icon-xl);
+  height: var(--icon-xl);
+  margin-right: 10px;
+}
+
+.detailTitle h2 {
+  font-weight: 600;
+  font-size: var(--font-size-2xl);
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.detailItemBoxContainer {
+  width: 100%;
+
+  border-radius: 10px;
+  overflow: hidden;
+
+  margin-top: 0;
+}
+
+.detailBoxFs {
+  font-size: var(--font-size-md);
+}
+
+.detailRowItemBox {
+  display: flex;
+
+  width: 100%;
+  height: 60px;
+}
+
+/* B-6: 배터리 행 - 슬라이더+라벨 공간 확보 */
+.detailRowBattery {
+  display: flex;
+  width: 100%;
+  min-height: 80px;
+}
+
+.detailItemBox {
+  display: flex;
+  width: 427px;
+}
+
+/* B-7: 좌/우 컬럼 구분선 */
+.detailItemBoxBorderRight {
+  border-right: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.btnBline {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+
+.itemTitleBox {
+  width: 150px;
+
+  display: flex;
+  align-items: center;
+
+  background: var(--surface-4);
+
+  padding-left: 27px;
+
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+
+.itemContentBox {
+  width: 277px;
+  background: var(--surface-input);
+  padding: 0 29px;
+
+  display: flex;
+  align-items: center;
+
+  font-weight: 400;
+  color: var(--text-primary);
+}
+
+.plusPd11 {
+  padding: 0 29px;
+}
+
+.batteryBar input,
+.itemContentBox input {
+  width: 100%;
+  height: 33px;
+
+  background: transparent;
+
+  border-radius: 5px;
+  border: none;
+  color: var(--text-primary);
+  transition: background 0.2s ease, border-color 0.2s ease;
+}
+
+.editMode .batteryBar input,
+.editMode .itemContentBox input {
+  width: 100%;
+
+  background: transparent;
+
+  border-radius: 5px;
+  border: 1px solid var(--border-input);
+  padding: 0 11px;
+
+  color: var(--text-primary);
+}
+
+/* 수정 모드: 수정 불가 필드 텍스트 흐리게 */
+.editMode .itemContentBox {
+  color: var(--text-tertiary);
+}
+
+.editMode .batteryBar input:focus,
+.editMode .itemContentBox input:focus {
+  outline: none;
+  border-color: var(--color-accent);
+}
+
+.editMode .itemContentBox input::placeholder {
+  color: var(--text-muted);
+}
+
+/* range 기본 스타일 제거 */
+.batteryBarInputBg {
+  border-radius: 999px;
+
+  /* 중요: 활성(왼쪽) / 비활성(오른쪽) 분기 */
+  background: linear-gradient(
+    to right,
+    var(--color-accent-slider) 0%,
+    var(--color-accent-slider) var(--percent),
+    var(--surface-5) var(--percent),
+    var(--surface-5) 100%
+  );
+}
+
+/* Webkit thumb */
+.batteryBarInputBg::-webkit-slider-thumb {
+  border-radius: 100%;
+  background: var(--color-accent-slider);
+}
+
+/* Firefox thumb */
+.batteryBarInputBg::-moz-range-thumb {
+  border-radius: 100%;
+  background: var(--color-accent-slider);
+}
+
+/* Firefox track 색이 별도라서 투명 처리 후 input background를 사용 */
+.batteryBarInputBg::-moz-range-track {
+  background: transparent;
+}
+
+.detailBattery {
+  width: 427px;
+
+  background: var(--surface-input);
+
+  display: flex;
+  justify-content: center;
+  align-items: flex-end;
+
+  padding-bottom: 10px;
+}
+
+.batteryBarFc {
+  color: var(--text-secondary);
+}
+
+/* 슬라이더 비활성 스타일 (보기 모드) */
+.sliderDisabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.sliderLabelDisabled {
+  opacity: 0.5;
+}
+
+/* B-1: 로딩 상태 */
+.detailLoadingWrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  min-height: 300px;
+  color: var(--text-tertiary);
+  font-size: var(--font-size-md);
+}
+
+.detailSpinner {
+  width: 36px;
+  height: 36px;
+  border: 3px solid rgba(255, 255, 255, 0.15);
+  border-top-color: var(--color-info);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+/* B-2: 에러 상태 */
+.detailErrorWrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  min-height: 300px;
+  color: var(--text-tertiary);
+  font-size: var(--font-size-md);
+}
+
+/* B-5: 수정 모드에서 읽기전용 필드 시각 구분 */
+.editMode .readonlyField {
+  color: var(--text-muted);
+  background: var(--surface-select);
+}
+
+.lhUnset {
+  line-height: unset;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.borderTl8 {
+  border-top-left-radius: 8px;
+}
+
+.borderTr8 {
+  border-top-right-radius: 8px;
+}
+
+.borderBl8 {
+  border-bottom-left-radius: 8px;
+}
+
+.borderBr8 {
+  border-bottom-right-radius: 8px;
+}
+
+.insertBtnTotal {
+  width: 100%;
+  display: flex;
+  justify-content: flex-end;
+  /* 취소/저장이 맞붙어 오조작이 나기 쉬웠다. 다른 모달(ScheduleCrud/PathCrud)과 같은 값으로 맞춘다. */
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.btnTotal {
+  width: 100%;
+  margin-top: 14px;
+}
+
+.btnLeftBox {
+  width: 100%;
+
+  display: flex;
+  justify-content: flex-end;
+  cursor: pointer;
+}
+
+.btnRightBox {
+  width: 100%;
+
+  display: flex;
+  justify-content: flex-end;
+  cursor: pointer;
+}
+
+.btnBgGray {
+  background: #626a81;
+}
+
+.mr10 {
+  margin-right: 10px;
+}
+
+
+
+/* 모달 delete 추가 알림 css */
+.confirmOverlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 120;
+}
+
+.confirmBox {
+
+  width: 400px;
+  border-radius: 14px;
+
+  background: var(--surface-3);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.4);
+
+  position: relative;
+
+  /* 균형 잡힌 내부 간격 — 상단 닫기버튼 영역 확보 + 본문↔버튼 일정 간격 */
+  padding: 34px 28px 26px;
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+}
+
+.confirmBox .closeBox {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  padding: 4px;          /* 클릭 영역은 유지하되 아이콘은 코너로 */
+  line-height: 0;
+  border-radius: 6px;
+  transition: background 0.15s ease;
+}
+
+.confirmBox .closeBox:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.confirmBox .closeBox img {
+  width: 14px;           /* 기존 --icon-md(큼) → 축소하여 본문 텍스트와 겹침 방지 */
+  height: 14px;
+  display: block;
+}
+
+.confirmButtons {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+}
+
+.confirmContents {
+  /* flex gap 으로 버튼과 간격을 잡으므로 margin 은 닫기버튼 클리어 용 최소만 */
+  margin: 10px 0 0 0;
+  padding: 0 12px;
+
+  text-align: center;
+  white-space: pre-line;
+  word-break: keep-all;
+  font-size: var(--font-size-xl);
+  line-height: 1.6;
+}
+
+.btnItemCommon {
+  width: 110px;
+  height: 40px;
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+
+  border-radius: 9px;
+  border: none;
+  cursor: pointer;
+
+  font-size: var(--font-size-md);
+  color: var(--text-primary);
+  transition: background 0.15s ease, transform 0.1s ease;
+}
+
+
+.btnItemCommon img {
+  height: 11px;
+  width: auto;
+}
+
+.btnIcon {
+  width: 16px;
+  height: 12px;
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.btnIcon img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+.btnBgRed {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: var(--surface-5);
+}
+
+.btnItemCommon:hover {
+  transform: translateY(-1px);
+}
+.btnBgRed:hover {
+  background: var(--surface-elevated);
+}
+.btnBgBlue:hover {
+  background: var(--color-info-border);
+}
+
+
+.btnBgBlue {
+  border: none;
+  background: var(--color-info);
+  font-weight: 600;
+}
+
+
+
+/* ===== VideoPlayModal ===== */
+
+/* 헤더: 메타 정보 + 닫기 */
+.vpModalHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.vpMetaPrimary {
+  font-size: var(--font-size-lg);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.vpMetaDot {
+  color: var(--text-muted);
+  opacity: 0.4;
+}
+
+.vpMetaType {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: var(--font-size-md);
+  color: var(--text-tertiary);
+}
+
+.vpTypeIcon {
+  width: 7px;
+  height: 7px;
+  background: var(--color-success);
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.vpCloseBtn {
+  margin-left: auto;
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  font-size: var(--font-size-xl);
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 4px;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+
+.vpCloseBtn:hover {
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+/* 비디오 영역 */
+.videoViewBox {
+  border-radius: 12px;
+  position: relative;
+  cursor: pointer;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+  background: #000;
+}
+
+.videoView {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* 오버레이 공통 (로딩/에러) */
+.vpOverlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  background: rgba(0, 0, 0, 0.6);
+  z-index: 5;
+}
+
+/* 로딩 스피너 */
+.vpSpinner {
+  width: 36px;
+  height: 36px;
+  border: 3px solid rgba(255, 255, 255, 0.15);
+  border-top-color: var(--color-accent);
+  border-radius: 50%;
+  animation: vpSpin 0.8s linear infinite;
+}
+
+@keyframes vpSpin {
+  to { transform: rotate(360deg); }
+}
+
+/* 에러 */
+.vpErrorText {
+  color: var(--text-tertiary);
+  font-size: var(--font-size-md);
+}
+
+.vpErrorReason {
+  color: var(--text-quaternary, #888);
+  font-size: var(--font-size-sm);
+  margin-top: 6px;
+  text-align: center;
+  max-width: 80%;
+  line-height: 1.4;
+}
+
+.vpRetryBtn {
+  padding: 6px 20px;
+  border-radius: 6px;
+  border: 1px solid var(--border-subtle);
+  background: var(--surface-button);
+  color: var(--text-primary);
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.vpRetryBtn:hover {
+  background: var(--surface-elevated);
+}
+
+/* 플레이/일시정지 오버레이 버튼 */
+.vpPlayOverlay {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 72px;
+  height: 72px;
+  transform: translate(-50%, -50%);
+  cursor: pointer;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.35);
+  border: none;
+  transition: transform 0.15s ease, background 0.15s ease;
+  z-index: 4;
+}
+
+.vpPlayOverlay:hover {
+  transform: translate(-50%, -50%) scale(1.1);
+  background: rgba(0, 0, 0, 0.5);
+}
+
+.vpPlayOverlay img {
+  width: 36%;
+  filter: brightness(0.95);
+}
+
+/* 플레이어 래퍼 */
+.playerWrapper {
+  width: 100%;
+  border-radius: 12px;
+  overflow: hidden;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 컨트롤 바 */
+.controlBox {
+  display: flex;
+  flex-direction: column;
+  padding-top: 14px;
+  transition: opacity 0.2s ease;
+}
+
+.playBarBox {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 0;
+  font-size: var(--font-size-sm);
+  color: var(--text-secondary);
+}
+
+/* 컨트롤 그룹 */
+.controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.show {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.hide {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.iconBtn {
+  border: none;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  padding: 4px;
+  width: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  transition: opacity 0.15s ease;
+}
+
+.iconBtn:hover {
+  opacity: 0.7;
+}
+
+.iconBtn img {
+  height: var(--icon-md);
+}
+
+/* 시간 표시 */
+.timeText {
+  min-width: 100px;
+  text-align: center;
+  font-size: var(--font-size-sm);
+  color: var(--text-muted);
+  user-select: none;
+}
+
+.timeCurrent {
+  color: var(--text-primary);
+}
+
+.timeSep {
+  color: var(--text-muted);
+  opacity: 0.5;
+}
+
+.timeDuration {
+  color: var(--text-tertiary);
+}
+
+/* 프로그레스바 */
+.progressBar {
+  -webkit-appearance: none;
+  width: 100%;
+  height: 4px;
+  border-radius: 4px;
+  outline: none;
+  background: #4b5563;
+  cursor: pointer;
+  transition: height 0.15s ease;
+}
+
+.progressBar:hover {
+  height: 6px;
+}
+
+.progressBar::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--color-accent);
+  cursor: pointer;
+  transition: transform 0.1s ease;
+}
+
+.progressBar:hover::-webkit-slider-thumb {
+  transform: scale(1.2);
+}
+
+.progressBar::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--color-accent);
+  border: none;
+}
+
+/* 볼륨 슬라이더 */
+.volumeBar {
+  -webkit-appearance: none;
+  width: 80px;
+  height: 4px;
+  border-radius: 4px;
+  outline: none;
+  background: #4b5563;
+  cursor: pointer;
+}
+
+.volumeBar::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 4px;
+  background: linear-gradient(
+    to right,
+    #ffffff 0%,
+    #ffffff var(--volume-percent, 50%),
+    #4b5563 var(--volume-percent, 50%),
+    #4b5563 100%
+  );
+}
+
+.volumeBar::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #ffffff;
+  cursor: pointer;
+  margin-top: -4px;
+  position: relative;
+  z-index: 2;
+}
+
+/* 전체화면 컨트롤 */
+.fullscreenControls {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  width: 100%;
+  background: linear-gradient(transparent, rgba(0, 0, 0, 0.7));
+  transition: opacity 0.2s ease;
+  padding: 20px 20px 14px;
+}
+
+.fullscreenControls .playBarBox {
+  margin-top: 0;
+}
+
+.fullscreenControls .progressBar {
+  margin-bottom: 4px;
+}
+
+
+
+/* Header - Alerts */
+.alertsModalContent {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 100;
+
+  width: 440px;
+  border-radius: 12px;
+  background: var(--surface-3);
+  border: 1px solid var(--border-subtle);
+
+  padding: 20px;
+
+  display: flex;
+  flex-direction: column;
+
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  animation: alertsSlideIn 0.15s ease-out;
+}
+
+@keyframes alertsSlideIn {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+
+.alertsModalTop {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 14px;
+}
+
+.alertsModalTitle {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text-primary);
+  letter-spacing: -0.2px;
+}
+
+.alertsTopActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.alertsViewAllBtn {
+  padding: 0;
+  background: transparent;
+  border: none;
+  color: rgba(255, 255, 255, 0.45);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: color 0.15s;
+  white-space: nowrap;
+}
+
+.alertsViewAllBtn:hover {
+  color: #38bdf8;
+}
+
+/* 탭 행: 탭 바 + 전체 읽음 버튼 */
+.alertsTabRow {
+  display: flex;
+  align-items: stretch;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.alertsTabCount {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+/* 탭 바 */
+.alertsTabBar {
+  display: flex;
+  gap: 0;
+}
+
+/* 전체 읽음 버튼 */
+.alertsMarkAllReadBtn {
+  height: 24px;
+  padding: 0 10px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 4px;
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+  white-space: nowrap;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  align-self: center;
+}
+
+.alertsMarkAllReadBtn:hover {
+  background: var(--color-info-bg);
+  border-color: var(--color-info-border);
+  color: #fff;
+}
+
+.alertsMarkAllReadBtn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.alertsTab {
+  padding: 8px 12px;
+  border: none;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.55);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  margin-bottom: -1px;
+}
+
+
+.alertsTabActive {
+  color: #fff;
+  font-weight: 700;
+  border-bottom-color: var(--color-info-bg);
+}
+
+/* 에러 항목 좌측 컬러 바 (긴급도 강조) */
+.alertsItemError {
+  border-left: 3px solid var(--color-error-badge);
+}
+
+/* 빈 상태 */
+.alertsEmpty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 200px;
+  color: var(--text-secondary);
+  font-size: var(--font-size-md);
+  gap: 8px;
+}
+
+.alertsEmptySub {
+  font-size: var(--font-size-sm);
+  color: var(--text-tertiary);
+}
+
+.alertsContents {
+  width: 100%;
+  flex: 1;
+  min-height: 0;
+  max-height: 340px;
+
+  position: relative;
+  overflow: hidden;
+}
+
+/* 실제 스크롤 영역: 네이티브 스크롤바는 숨김 */
+.alertsScroll {
+  max-height: inherit;
+  overflow-y: scroll;
+  padding-right: 6px;
+  padding-bottom: 4px;
+  box-sizing: border-box;
+
+  /* 스크롤바 숨김(네이티브) */
+  scrollbar-width: none; /* Firefox */
+}
+.alertsScroll::-webkit-scrollbar {
+  display: none; /* Chrome/Edge */
+}
+
+.alertsInner {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.scrollTrack {
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  right: 0;
+
+  width: 4px;
+  border-radius: 50px;
+  background: transparent;
+}
+
+/* 썸(움직이는 막대) */
+.scrollThumb {
+  position: absolute;
+  top: 0;
+  left: 0;
+
+  width: 100%;
+  height: 50%;            /* JS가 동적으로 조절 */
+  border-radius: 50px;
+  background: rgba(148, 150, 161, 0.5);
+}
+
+.scrollThumb:hover {
+  background: rgba(148, 150, 161, 0.8);
+}
+
+.alertsItem {
+  width: 100%;
+
+  background: var(--surface-5);
+  border-radius: 6px;
+
+  padding: 8px 14px;
+
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+
+  font-size: var(--font-size-sm);
+  transition: background 0.12s;
+}
+
+.alertsItem:hover {
+  background: var(--surface-elevated, var(--surface-5));
+}
+
+.alertsItem:not(:last-child) {
+  margin-bottom: 0;
+}
+
+.alertsItem .topContents {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+}
+
+.alertsItem .topLeft {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  flex: 1;
+}
+
+.aletsActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.aletsReadBtn {
+  height: 18px;
+  padding: 0 8px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 4px;
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.aletsReadBtn:hover {
+  background: var(--color-info-bg);
+  border-color: var(--color-info-border);
+  color: #fff;
+}
+
+.aletsType {
+  padding: 0 6px;
+  height: 18px;
+  line-height: 18px;
+  border-radius: 3px;
+  text-align: center;
+  font-size: 11px;
+  font-weight: 600;
+  flex-shrink: 0;
+  margin-right: 6px;
+}
+
+/* 타입별 배지 색상 */
+.badge--notice   { background-color: var(--color-success-bg); } /* 녹색 */
+.badge--schedule { background-color: var(--color-warning-badge); } /* 다크 노랑 */
+.badge--emerg    { background-color: var(--color-error-badge); } /* 빨강 */
+.badge--robot    { background-color: var(--color-info-badge); } /* 파랑 */
+
+.aletsStatus {
+  min-width: 30px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 3px;
+
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 18px;
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  margin-right: 6px;
+}
+
+.aletsStatus.statusError {
+  background: transparent;
+  border: 1px solid rgba(239, 68, 68, 0.6);
+  color: #f87171;
+}
+
+.aletsStatus.statusInfo {
+  background: transparent;
+  border: 1px solid rgba(56, 189, 248, 0.6);
+  color: #38bdf8;
+}
+
+.aletsStatus.statusEvent {
+  background: transparent;
+  border: 1px solid rgba(168, 85, 247, 0.6);
+  color: #a78bfa;
+}
+
+.aletsStatusEmpty {
+  width: 0;
+}
+
+.aletsRobotName {
+  color: #38bdf8;
+  margin-right: 5px;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+
+.aletsContent {
+  font-size: 13px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.85);
+
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.aletsDetail {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.5);
+  line-height: 1.5;
+  padding: 0 2px;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.aletsDate {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.35);
+}
+
+.aletsSendLogBtn {
+  width: 88px;
+  height: 27px;
+  border-radius: 50px;
+  border: 1px solid var(--border-default);
+  background: var(--surface-3);
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  flex-shrink: 0;
+  cursor: pointer;
+}
+
+.aletsSendLogBtn img {
+  width: 11px;
+  height: 9px;
+
+  margin-right: 6px;
+}
+
+.aletsSendLogBtn span {
+  font-size: var(--font-size-sm);
+  color: var(--text-primary);
+}
+
+
+
+/* WorkScheduleModal */
+
+.robotScheduleModalContent {
+  width: 481px;
+  height: auto;
+
+  padding: 24px 28px 24px 28px;
+  border-radius: 15px;
+
+  background: var(--surface-3);
+
+  position: relative;
+  animation: modalSlideIn 0.25s ease-out;
+}
+
+.scheduleCloseBtn {
+  border: none;
+
+  width: 32px;
+  height: 32px;
+
+  background: transparent;
+
+  font-size: var(--font-size-xl);
+  color: var(--text-primary);
+
+  position: absolute;
+  right: 28px;
+  top: 24px;
+
+  cursor: pointer;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s ease;
+}
+
+.scheduleCloseBtn:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.scheduleCloseBtn:focus-visible {
+  outline: 2px solid var(--color-info);
+  outline-offset: 2px;
+}
+
+/* ─── 스케줄 모달 헤더 ─── */
+.scheduleModalHeader {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.scheduleModalHeader img {
+  height: 26px;
+  width: auto;
+}
+
+.scheduleModalHeader h2 {
+  margin: 0;
+  font-size: var(--font-size-3xl);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.scheduleTitle, .scheduleNoneTitle {
+  margin-top: 0;
+  margin-bottom: 16px;
+  text-align: center;
+
+  font-size: var(--font-size-md);
+  line-height: 160%;
+  font-weight: 400;
+}
+
+.scheduleSubtitle {
+  font-size: var(--font-size-sm);
+  color: var(--text-tertiary);
+  text-align: center;
+  margin-top: -16px;
+  margin-bottom: 20px;
+}
+
+.schedulePathTitle {
+  color : var(--text-secondary);
+  font-size: var(--font-size-md);
+
+  margin-bottom: 8px;
+}
+
+.scheduleTitleB {
+  color : var(--text-accent);
+}
+
+.scheduleTitleR {
+  color : var(--color-error-soft);
+}
+
+
+.schedulePathBox .schedulePathContents {
+  width: 100%;
+  height: 102px;
+  max-height: 102px;
+  line-height: 150%;
+
+  background: var(--surface-select);
+
+  border: 1px solid var(--border-default);
+  border-radius: 4px;
+
+  padding: 11px 9px 20px;
+  margin-bottom: 20px;
+
+  position: relative;
+  overflow: hidden;
+}
+
+.schedulePathInner {
+  font-size: var(--font-size-md);
+  color: var(--text-secondary);
+  word-break: keep-all;
+  overflow-wrap: break-word;
+}
+
+.schedulePathEmpty {
+  color: var(--text-muted);
+  font-style: italic;
+  font-size: var(--font-size-md);
+}
+
+/* 실제 스크롤 영역: 네이티브 스크롤바는 숨김 */
+.scheduleInner {
+  max-height: inherit;
+  overflow-y: scroll;
+  padding-right: 3px; /* 오른쪽 커스텀 스크롤바 공간 */
+  padding-bottom: 20px;
+  box-sizing: border-box;
+
+  /* 스크롤바 숨김(네이티브) */
+  scrollbar-width: none; /* Firefox */
+}
+.scheduleInner::-webkit-scrollbar {
+  display: none; /* Chrome/Edge */
+}
+
+.scheduleScrollTrack {
+  position: absolute;
+  top: 10px;
+  bottom: 10px;
+  right: 9px;
+
+  width: 4px;
+  border-radius: 50px;
+  background:transparent;
+}
+
+/* 썸(움직이는 막대) */
+.scheduleScrollThumb {
+  position: absolute;
+  top: 0;
+  left: 0;
+
+  width: 100%;
+  height: 50%;            /* JS가 동적으로 조절 */
+  border-radius: 50px;
+  background: var(--text-tertiary);
+}
+
+.workBtnBox {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+}
+
+.workBtnCommon {
+  flex: 1;
+  height: 44px;
+  border-radius: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--text-primary);
+  font-size: var(--font-size-lg);
+  font-weight: 500;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.15s ease, transform 0.1s ease;
+}
+
+.workBtnCommon:active {
+  transform: scale(0.97);
+}
+
+.workBtnCommon:focus-visible {
+  outline: 2px solid var(--color-info);
+  outline-offset: 2px;
+}
+
+.workBtnCommon img {
+  height: 12px;
+  width: auto;
+}
+
+.workBtnBgRed {
+  background: var(--surface-5);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.workBtnBgBlue {
+  background: var(--color-info);
+  border: 1px solid var(--color-info-border);
+  font-weight: 600;
+}
+
+.workBtnDisabled {
+  opacity: 0.4;
+  pointer-events: none;
+  cursor: default;
+}
+
+
+.robotScheduleNoneModalContent {
+  width: 481px;
+  height: auto;
+  min-height: 220px;
+
+  padding: 24px 28px 28px 28px;
+  border-radius: 15px;
+
+  background: var(--surface-3);
+
+  position: relative;
+  animation: modalSlideIn 0.25s ease-out;
+}
+
+/* 에러 메시지 */
+.scheduleError {
+  color: var(--color-error-soft);
+  font-size: var(--font-size-sm);
+  text-align: center;
+  margin-bottom: 12px;
+}
+
+/* 스피너 (loading 상태 버튼 내부) */
+.workBtnSpinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+}
+
+/* ─── 스케줄 모달 로딩 ─── */
+.scheduleLoadingWrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 48px 0 32px;
+}
+
+.scheduleLoadingSpinner {
+  width: 28px;
+  height: 28px;
+  border: 3px solid rgba(255, 255, 255, 0.15);
+  border-top-color: var(--color-info, #0e85b7);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+
+.scheduleLoadingText {
+  font-size: var(--font-size-md);
+  color: var(--text-tertiary);
+}
+
+/* ─── 스케줄 모달 에러 + retry ─── */
+.scheduleErrorWrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 32px 0 24px;
+}
+
+.scheduleErrorMsg {
+  font-size: var(--font-size-md);
+  color: var(--color-error-soft);
+  text-align: center;
+}
+
+.scheduleRetryBtn {
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  color: var(--text-secondary);
+  font-size: var(--font-size-sm);
+  padding: 6px 18px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.scheduleRetryBtn:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+/* ─── none 케이스 안내 ─── */
+.scheduleNoneBody {
+  text-align: center;
+  padding: 28px 0 20px;
+}
+
+.scheduleNoneSub {
+  font-size: var(--font-size-sm);
+  color: var(--text-muted);
+  margin-top: 10px;
+}
+
+/* ─── 경로 칩 ─── */
+.scheduleChipWrap {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 2px;
+}
+
+.scheduleChip {
+  display: inline-block;
+  font-size: var(--font-size-sm);
+  color: var(--text-secondary);
+  background: rgba(255, 255, 255, 0.06);
+  padding: 2px 10px;
+  border-radius: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  white-space: nowrap;
+}
+
+.scheduleChipHighlight {
+  color: var(--color-info-border, #0e85b7);
+  background: rgba(14, 133, 183, 0.12);
+  border-color: rgba(14, 133, 183, 0.25);
+  font-weight: 600;
+}
+
+.scheduleChipArrow {
+  font-size: var(--font-size-xs);
+  color: var(--text-muted);
+  margin: 0 1px;
+}
+
+@keyframes modalSlideIn {
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.placePathModalContent {
+  width: 460px;
+  padding: 24px 28px;
+  border-radius: 12px;
+  background: var(--surface-3);
+  position: relative;
+}
+
+.placeCloseBtn {
+  border: none;
+  width: 28px;
+  height: 28px;
+  background: transparent;
+  font-size: var(--font-size-xl);
+  color: var(--text-primary);
+  cursor: pointer;
+  position: absolute;
+  top: 20px;
+  right: 20px;
+}
+
+.placeModalHeader {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.placeModalHeader img {
+  height: 26px;
+  width: auto;
+}
+
+.placeModalHeader h2 {
+  margin: 0;
+  font-size: var(--font-size-3xl);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.placeTitle {
+  margin-bottom: 16px;
+  text-align: center;
+  font-size: var(--font-size-md);
+  color: var(--text-tertiary);
+}
+
+.placePathBox {
+  width: 100%;
+  max-height: 204px;  /* 34px × 6행 */
+  overflow: hidden;
+  background: var(--surface-5);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 24px;
+  position: relative;
+}
+
+.placePathItem {
+  width: 100%;
+  height: 34px;
+  line-height: 34px;
+  padding: 0 10px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+
+.placePathItem:hover {
+  background: var(--surface-elevated);
+}
+
+.placePathItem.active {
+  background: var(--color-info-selected);
+}
+
+.placePathItem img {
+  width: var(--icon-sm);
+  height: var(--icon-sm);
+  flex-shrink: 0;
+}
+
+.placePathTitle {
+  color: var(--text-secondary);
+  font-size: var(--font-size-md);
+}
+
+.placeEmpty {
+  text-align: center;
+  padding: 40px 0;
+  color: var(--text-muted);
+  font-size: var(--font-size-md);
+}
+
+/* 스크롤 영역 */
+.placeInner {
+  max-height: inherit;
+  overflow-y: scroll;
+  padding-right: 6px;
+  padding-bottom: 4px;
+  box-sizing: border-box;
+  scrollbar-width: none;
+}
+
+.placeInner::-webkit-scrollbar {
+  display: none;
+}
+
+.placeScrollTrack {
+  position: absolute;
+  top: 10px;
+  bottom: 10px;
+  right: 6px;
+  width: 4px;
+  border-radius: 50px;
+  background: transparent;
+}
+
+.placeScrollThumb {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 50%;
+  border-radius: 50px;
+  background: #EAEAED;
+}
+
+/* ─── 경로 이동 모달 항목 ─── */
+.pathMoveItem {
+  height: auto;
+  line-height: normal;
+  padding: 8px 10px;
+  align-items: flex-start;
+}
+
+.pathMoveInfo {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.pathMoveNameRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.pathMoveName {
+  font-weight: 600;
+  color: var(--text-primary);
+  font-size: var(--font-size-md);
+}
+
+.pathMoveBadge {
+  flex-shrink: 0;
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  padding: 2px 10px;
+  border-radius: 4px;
+  border: 1px solid;
+}
+
+.pathMoveBadge1 {
+  color: #5bc0fa;
+  background: rgba(91, 192, 250, 0.12);
+  border-color: rgba(91, 192, 250, 0.3);
+}
+
+.pathMoveBadge2 {
+  color: #a78bfa;
+  background: rgba(167, 139, 250, 0.12);
+  border-color: rgba(167, 139, 250, 0.3);
+}
+
+.pathMoveBadge3 {
+  color: #f59e0b;
+  background: rgba(245, 158, 11, 0.12);
+  border-color: rgba(245, 158, 11, 0.3);
+}
+
+.pathMoveOrder {
+  font-size: var(--font-size-sm);
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 로봇 상세 모달 - 액션 버튼 바 */
+/* ── 실시간 현황 섹션 ── */
+
+/* 상태 배지 */
+.detailStatusBadge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 10px;
+  border-radius: 12px;
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  line-height: 20px;
+}
+
+.detailBadgeOperating { color: #22c55e; }
+.detailBadgeStandby   { color: #93bbfc; }
+.detailBadgeCharging  { color: #eab308; }
+.detailBadgeOffline   { color: #6b7280; }
+
+/* 네트워크 dot */
+.detailNetDot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 6px;
+  flex-shrink: 0;
+}
+
+.detailNetDotOnline  { background: #22c55e; }
+.detailNetDotError   { background: #f59e0b; }
+.detailNetDotOffline { background: #ef4444; }
+
+/* 배터리 미니바 */
+.detailBatBar {
+  display: inline-block;
+  width: 40px;
+  height: 6px;
+  background: var(--surface-5);
+  border-radius: 3px;
+  margin-left: 6px;
+  vertical-align: middle;
+  overflow: hidden;
+}
+
+.detailBatFill {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.3s ease;
+}
+
+.detailBatSuccess.detailStatusValue { color: #22c55e; }
+.detailBatWarning.detailStatusValue { color: #f59e0b; }
+.detailBatDanger.detailStatusValue  { color: #ef4444; }
+
+/* 전원 dot */
+.detailPowerDot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 6px;
+  flex-shrink: 0;
+}
+
+.detailPowerOn  { background: #22c55e; }
+.detailPowerOff { background: #6b7280; }
+
+/* 오프라인 상태 현황 */
+.detailStatusOffline {
+  opacity: 0.6;
+}
+
+/* 네트워크 끊김 경고 */
+.detailNetworkWarning {
+  font-size: var(--font-size-xs);
+  color: #f59e0b;
+  background: rgba(245, 158, 11, 0.1);
+  border: 1px solid rgba(245, 158, 11, 0.3);
+  border-radius: 6px;
+  padding: 4px 10px;
+  margin-bottom: 10px;
+}
+
+.detailSectionTitle {
+  font-size: var(--font-size-md);
+  font-weight: 600;
+  color: var(--text-accent);
+  margin: 0 0 8px 0;
+}
+
+.detailStatusSection {
+  margin-bottom: 12px;
+  padding: 12px 16px;
+  background: var(--surface-2);
+  border-radius: 10px;
+  border: 1px solid var(--border-subtle);
+}
+
+.detailStatusGrid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px 20px;
+}
+
+.detailStatusItem {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.detailStatusLabel {
+  font-size: var(--font-size-md);
+  color: var(--text-secondary);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.detailStatusValue {
+  font-size: var(--font-size-md);
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+/* ── 현재 작업 섹션 ── */
+.detailTaskSection {
+  margin-bottom: 12px;
+  padding: 12px 16px;
+  background: var(--surface-2);
+  border-radius: 10px;
+  border: 1px solid var(--border-subtle);
+  min-height: 120px;
+}
+
+.detailTaskEmpty {
+  color: var(--text-muted);
+  font-size: var(--font-size-sm);
+  text-align: center;
+  padding: 20px 0;
+}
+
+.detailTaskList {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 280px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+
+.detailTaskCard {
+  background: var(--surface-3);
+  border-radius: 8px;
+  padding: 12px 14px;
+  border: 1px solid var(--border-subtle);
+}
+
+.detailTaskHeader {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;          /* 작업명 + 상태 + 응대 상태가 한 줄에 다 안 들어갈 수 있다 */
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.detailTaskName {
+  font-size: var(--font-size-md);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.detailTaskType {
+  font-size: var(--font-size-xs);
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: rgba(59, 130, 246, 0.2);
+  color: #93bbfc;
+}
+
+.detailTaskTime {
+  font-size: var(--font-size-xs);
+  color: var(--text-muted);
+  margin-left: auto;
+}
+
+.detailTaskInfo {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.detailTaskInfoItem {
+  font-size: var(--font-size-sm);
+  color: var(--text-secondary);
+}
+
+.detailTaskMode {
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 10px;
+}
+
+.detailTaskMode[data-mode="once"] {
+  color: #92D050;
+  background: rgba(146, 208, 80, 0.15);
+}
+
+.detailTaskMode[data-mode="weekly"] {
+  color: #7EC8F0;
+  background: rgba(126, 200, 240, 0.15);
+}
+
+.detailTaskMode[data-mode="interval"] {
+  color: #F0A030;
+  background: rgba(240, 160, 48, 0.15);
+}
+
+.detailTaskStatus {
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  padding: 2px 10px;
+  border-radius: 10px;
+  color: #00B0EE;
+  background: rgba(0, 176, 238, 0.15);
+}
+
+/* 다중 시각 슬롯 */
+.detailTimeSlots {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.detailTimeSlot {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--font-size-sm);
+  padding: 3px 10px;
+  border-radius: 6px;
+  font-weight: 500;
+  transition: all 0.2s;
+}
+
+.detailTimeSlotIcon {
+  font-size: 10px;
+  line-height: 1;
+}
+
+.detailTimeSlot_done {
+  color: rgba(146, 208, 80, 0.8);
+  background: rgba(146, 208, 80, 0.1);
+  text-decoration: line-through;
+  opacity: 0.7;
+}
+
+.detailTimeSlot_active {
+  color: #00B0EE;
+  background: rgba(0, 176, 238, 0.15);
+  font-weight: 700;
+  box-shadow: 0 0 0 1px rgba(0, 176, 238, 0.3);
+}
+
+.detailTimeSlot_waiting {
+  color: var(--text-muted);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+/* 경로 진행 트랙 */
+.detailWaypointTrack {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  overflow-x: auto;
+  padding: 4px 0;
+}
+
+.detailWaypointPlaceholder {
+  font-size: var(--font-size-xs);
+  color: var(--text-muted);
+  padding: 8px 0;
+  text-align: center;
+  width: 100%;
+  border: 1px dashed var(--border-subtle);
+  border-radius: 6px;
+}
+
+/* 경로 스텝 (API 연동 시 사용) */
+.waypointStep {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  flex-shrink: 0;
+}
+
+.waypointDot {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.waypointDot.completed { background: #22c55e; color: #fff; }
+.waypointDot.current   { background: #3b82f6; color: #fff; animation: pulse 1.5s ease infinite; }
+.waypointDot.pending   { background: var(--surface-5); color: var(--text-muted); }
+.waypointDot.error     { background: #ef4444; color: #fff; }
+
+.waypointLine {
+  width: 24px;
+  height: 2px;
+  flex-shrink: 0;
+}
+
+.waypointLine.completed { background: #22c55e; }
+.waypointLine.pending   { background: var(--border-subtle); }
+.waypointLine.error     { background: #ef4444; }
+
+.waypointLabel {
+  font-size: var(--font-size-2xs);
+  color: var(--text-tertiary);
+  text-align: center;
+  max-width: 60px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-top: 2px;
+}
+
+@keyframes pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.4); }
+  50% { box-shadow: 0 0 0 6px rgba(59, 130, 246, 0); }
+}
+
+/* ── 장착 모듈 섹션 ── */
+
+/* ── 기본 정보 (2열 그리드) ── */
+.detailInfoSection {
+  margin-bottom: 12px;
+  padding: 12px 16px;
+  background: var(--surface-2);
+  border-radius: 10px;
+  border: 1px solid var(--border-subtle);
+}
+
+.detailInfoGrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  column-gap: 16px;
+}
+
+.detailInfoRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  min-width: 0;
+}
+
+.detailInfoRow:nth-last-child(1),
+.detailInfoRow:nth-last-child(2) {
+  border-bottom: none;
+}
+
+.detailInfoFull {
+  grid-column: 1 / -1;
+}
+
+.detailInfoLabel {
+  font-size: var(--font-size-md);
+  color: var(--text-secondary);
+  font-weight: 500;
+  flex-shrink: 0;
+  min-width: 110px;
+  white-space: nowrap;
+}
+
+.detailInfoValue {
+  font-size: var(--font-size-md);
+  color: var(--text-primary);
+  text-align: left;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.detailInfoInput {
+  width: 100%;
+  text-align: left;
+  background: var(--surface-3);
+  border: 1px solid var(--border-default);
+  border-radius: 6px;
+  padding: 5px 10px;
+  color: var(--text-primary);
+  font-size: var(--font-size-sm);
+  box-sizing: border-box;
+}
+
+.detailInfoInput:focus {
+  outline: none;
+  border-color: var(--color-info);
+}
+
+/* 배터리 수정 영역 */
+.detailBatteryEdit {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  width: 100%;
+}
+
+.detailBatteryPercent {
+  font-size: var(--font-size-sm);
+  color: var(--text-muted);
+}
+
+.detailBatterySlider {
+  flex: 1;
+  height: 6px;
+  appearance: none;
+  background: linear-gradient(
+    to right,
+    var(--color-info) 0%,
+    var(--color-info) var(--percent),
+    var(--surface-5) var(--percent),
+    var(--surface-5) 100%
+  );
+  border-radius: 3px;
+  outline: none;
+  transition: height 0.15s ease;
+}
+
+.detailBatterySlider::-webkit-slider-thumb {
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--color-info);
+  border: 2px solid var(--surface-2);
+  box-shadow: 0 0 0 1px var(--color-info);
+  cursor: pointer;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.detailBatterySlider::-webkit-slider-thumb:hover {
+  transform: scale(1.15);
+  box-shadow: 0 0 0 2px rgba(0, 176, 238, 0.3);
+}
+
+.detailBatterySlider::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--color-info);
+  border: 2px solid var(--surface-2);
+  box-shadow: 0 0 0 1px var(--color-info);
+  cursor: pointer;
+}
+
+.detailBatterySlider::-moz-range-track {
+  height: 6px;
+  border-radius: 3px;
+  background: transparent;
+}
+
+.detailBatteryRange {
+  font-size: var(--font-size-2xs);
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+/* 조회 모드 배터리 표시 (프로그레스바 + 수치) */
+.detailBatteryView {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  font-size: var(--font-size-md);
+  color: var(--text-primary);
+}
+
+.detailBatteryBar {
+  display: inline-block;
+  width: 80px;
+  height: 6px;
+  background: var(--surface-5);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.detailBatteryFill {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  background: var(--color-info);
+  transition: width 0.3s ease;
+}
+
+/* ── 액션 바 (기본정보 섹션 내부) ── */
+.detailActionBar {
+  display: flex;
+  gap: 8px;
+  margin-top: 6px;
+  padding-top: 10px;
+}
+
+.detailActionBar button {
+  flex: 1;
+}
+/* ── 상시 대기 응대 진행 단계 (로봇 상세 › 현재 작업) ──
+   작업 카드 안에 들어가므로 세로를 최소로 쓴다 — 6단계는 점으로 축약한다. */
+.standbyLiveRow {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+  font-size: var(--font-size-sm);
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.standbyChip {
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.standbyScenarioTag {
+  padding: 1px 8px;
+  border: 1px solid var(--color-info-border);
+  border-radius: 4px;
+  color: var(--text-secondary);
+  font-size: var(--font-size-xs);
+  font-weight: 500;
+  flex-shrink: 0;
+}
+
+.standbyChipBusy { background: var(--color-info-badge); color: var(--text-primary); }
+.standbyChipWait { background: var(--color-success-bg); color: var(--text-primary); }
+
+.standbyDots {
+  display: flex;
+  gap: 5px;
+  flex-shrink: 0;
+}
+
+.standbyDot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.standbyDotDone { background: var(--color-success); }
+
+.standbyDotNow {
+  background: var(--color-info);
+  box-shadow: 0 0 0 3px rgba(0, 176, 238, 0.18);
+}
+
+.standbyStep {
+  color: var(--text-primary);
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.standbySub {
+  color: var(--text-muted);
+  font-size: var(--font-size-xs);
+  flex-shrink: 0;
+}
+
+/* 발화 원문만 길이를 못 정한다 — 남는 폭을 주고 넘치면 줄인다 */
+.standbyHeard {
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  flex: 1;
+}
+
+.standbyHeard b { color: var(--text-primary); font-weight: 600; }
+
+.standbyWarn { color: var(--color-warning); }
+
+.standbyWarnTag {
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: var(--color-warning-badge);
+  color: var(--text-primary);
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+/* 목적지 개수가 가변이라 카드 높이를 깨지 않도록 팝오버로 띄운다 */
+.standbyCallAnchor {
+  position: relative;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.standbyCallBtn {
+  height: 26px;
+  padding: 0 11px;
+  border-radius: 6px;
+  border: 1px solid var(--border-subtle);
+  background: var(--surface-button);
+  color: var(--text-secondary);
+  font-size: var(--font-size-xs);
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.standbyCallBtn:hover:not(:disabled) { background: var(--color-info-selected); color: var(--text-primary); }
+.standbyCallBtn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.standbyCallPopover {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  z-index: 30;
+  min-width: 260px;
+  max-width: 380px;
+  padding: 11px 13px;
+  background: var(--surface-4);
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
+  white-space: normal;
+}
+
+.standbyCallLabel {
+  font-size: var(--font-size-xs);
+  color: var(--text-tertiary);
+  margin-bottom: 9px;
+}
+
+.standbyCallBtns {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.standbyDestBtn {
+  height: 30px;
+  padding: 0 12px;
+  border-radius: 6px;
+  border: 1px solid var(--border-subtle);
+  background: var(--surface-button);
+  color: var(--text-secondary);
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+}
+
+.standbyDestBtn:hover:not(:disabled) { background: var(--color-info-selected); color: var(--text-primary); }
+.standbyDestBtn:disabled { opacity: 0.4; cursor: not-allowed; }
+.standbyDestUnlinked { border-style: dashed; }
+
+.standbyCallEmpty {
+  font-size: var(--font-size-sm);
+  color: var(--color-warning);
+}
+
+.standbyCallMsg {
+  margin-top: 9px;
+  font-size: var(--font-size-sm);
+  color: var(--text-accent);
+}
+
+/* 작업 상태 배지 — 기본은 진행중(파랑). '오류'는 눈에 띄어야 재개로 이어진다 */
+.detailTaskStatus[data-status="오류"] {
+  color: var(--color-error-soft);
+  background: var(--color-error-badge);
+}
+
+.detailTaskStatus[data-status="대기"] {
+  color: var(--color-warning);
+  background: var(--color-warning-badge);
+}
+
+/* 이동 멈춤 — 지점에 못 가 운영자 선택을 기다린다 */
+.detailTaskStatus[data-status="멈춤"] {
+  color: var(--color-warning);
+  background: rgba(255, 198, 53, 0.15);
+}
+
+.detailTaskActions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.detailTaskResumeBtn {
+  height: 30px;
+  padding: 0 14px;
+  border-radius: 6px;
+  border: 1px solid rgba(0, 176, 238, 0.5);
+  background: var(--color-info-selected);
+  color: var(--text-primary);
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.detailTaskResumeBtn:hover { background: var(--color-info-bg); }
+
+/* 중단 알림에서 바로 재개 — 통지 옆에 조치를 둔다.
+   당일 발생 건에만 붙는다(어제 알림에 두면 눌러도 오늘 아무 일도 안 일어난다). */
+.aletsResumeBtn {
+  height: 18px;
+  padding: 0 8px;
+  background: var(--color-info-selected);
+  border: 1px solid rgba(0, 176, 238, 0.5);
+  border-radius: 4px;
+  color: var(--text-primary);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  margin-right: 6px;
+}
+
+.aletsResumeBtn:hover:not(:disabled) { background: var(--color-info-bg); }
+.aletsResumeBtn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* ── 경유지 진행 (로봇 상세 › 현재 작업) ──
+   컴포넌트(WaypointProgress)는 오래전부터 있었는데 채울 API 가 없어 렌더되지 못했다.
+   GET /nav/progress 로 데이터가 생겨 비로소 붙는다. */
+.detailWaypointBox {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.detailWaypointHead {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.detailWaypointLoop {
+  font-size: var(--font-size-xs);
+  font-weight: 400;
+  color: var(--text-muted);
+}

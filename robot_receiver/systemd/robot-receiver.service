@@ -1,0 +1,36 @@
+# 관제 <-> 로봇 중계기. NOS(Jetson)에서 상시 동작해야 한다.
+#
+# 이게 꺼져 있으면 관제의 위치/상태/배터리/NAV/매핑이 전부 죽는다.
+# 표준 라이브러리만 쓰므로 ROS2 환경이 필요 없다.
+[Unit]
+Description=Robot receiver bridge (control server <-> robot ASDU)
+Documentation=file:///opt/robot/receiver/receiver.py
+After=network-online.target
+Wants=network-online.target
+# 반복 크래시로 systemd 가 재시작을 포기하지 않도록 한다([Unit] 섹션 키다).
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=root
+
+# 로봇 본체(eth2 대역) 주소. 망 구성이 바뀌면 여기만 고치고 daemon-reload 한다.
+Environment=ROBOT_IP=10.21.31.103
+Environment=ROBOT_PORT=30000
+Environment=RECEIVER_PORT=40000
+# print() 가 즉시 journal 로 흘러가도록 — 없으면 로그가 블록 단위로 밀려 디버깅이 어렵다.
+Environment=PYTHONUNBUFFERED=1
+
+WorkingDirectory=/opt/robot/receiver
+ExecStart=/usr/bin/python3 /opt/robot/receiver/receiver.py
+
+# 죽으면 항상 되살린다. 이번 장애의 재발 방지 핵심이다.
+Restart=always
+RestartSec=5
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=robot-receiver
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,46 @@
+/* ─── 탭 메뉴 (데이터관리/로봇관리와 동일 패턴) ─── */
+.settingTab {
+  display: flex;
+  gap: 6px;
+}
+
+.settingTab div {
+  background: var(--surface-tab-inactive);
+  border-radius: 8px 8px 0 0;
+
+  width: 120px;
+  height: var(--tab-height);
+
+  font-size: var(--font-size-md);
+  font-weight: 600;
+
+  color: var(--text-muted);
+  cursor: pointer;
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  transition: background 0.2s ease, color 0.2s ease;
+}
+
+.settingTab div:hover {
+  color: var(--text-tertiary);
+}
+
+.settingTab div.active {
+  background: var(--surface-3);
+  color: var(--text-primary);
+}
+
+/* ─── 탭 콘텐츠 영역 ─── */
+.container {
+  background: var(--surface-3);
+  border-radius: 10px 0 10px 10px;
+  width: 100%;
+  flex: 1;
+  min-height: var(--page-body-min-height);
+  min-width: var(--content-min-width);
+  padding: 20px;
+  overflow: hidden;
+}

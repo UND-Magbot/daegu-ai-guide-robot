@@ -1,0 +1,5 @@
+.git/
+frontend_bak/
+backend_logs/
+.next/
+robot_vision/

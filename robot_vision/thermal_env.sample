@@ -1,0 +1,7 @@
+# 열화상 카메라(Hikvision) 계정 — thermal_max_overlay.py 가 읽는다.
+# 이 파일을 thermal.env 로 복사해 THERMAL_CAMERA_PASS 를 채운다. thermal.env 는 git 에 올라가지 않는다(.gitignore).
+# 환경 변수로 직접 줘도 된다(환경 변수가 이 파일보다 우선). 다른 위치의 파일을 쓰려면 THERMAL_ENV_FILE=<경로>.
+THERMAL_CAMERA_IP=10.21.31.108
+THERMAL_CAMERA_PORT=443
+THERMAL_CAMERA_USER=admin
+THERMAL_CAMERA_PASS=

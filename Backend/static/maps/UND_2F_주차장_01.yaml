@@ -1,0 +1,6 @@
+image: /var/opt/robot/data/maps//UND_2F_주차장_01-20261013-145139/occ_grid.pgm
+resolution: 0.1
+origin: [-6.6, -20.9, 0.0]
+negate: 0
+occupied_thresh: 0.65
+free_thresh: 0.196

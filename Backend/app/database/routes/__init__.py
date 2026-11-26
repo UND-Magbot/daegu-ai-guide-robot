@@ -1,0 +1,28 @@
+"""DB 엔드포인트 aggregator.
+
+공용 `database` 라우터(`/DB` prefix)에 각 도메인 서브모듈이 자동으로
+엔드포인트를 등록한다. main.py는 이 `database` 라우터 하나만 include하면 된다.
+"""
+
+from fastapi import APIRouter
+
+from app.database.database import get_db  # re-export (하위 모듈에서 사용)
+
+database = APIRouter(prefix="/DB")
+
+# 각 도메인 서브모듈 import (side effect: database 라우터에 엔드포인트 등록)
+from app.database.routes import robot     # noqa: F401
+from app.database.routes import place     # noqa: F401
+from app.database.routes import path_way  # noqa: F401
+from app.database.routes import schedule  # noqa: F401
+from app.database.routes import schedule_run  # noqa: F401
+from app.database.routes import standby   # noqa: F401
+from app.database.routes import module    # noqa: F401
+from app.database.routes import voice     # noqa: F401
+from app.database.routes import agent_bridge  # noqa: F401  로봇→관제 호출 채널(토큰 인증)
+from app.database.routes import voice_scenario  # noqa: F401  다단계 시나리오(토큰 인증)
+from app.database.routes import voice_scenario_admin  # noqa: F401  다단계 시나리오 운영자 경로(로그인)
+from app.database.routes import voice_scenario_editor  # noqa: F401  시나리오 편집기(새로 만들기·저장·버전)
+from app.cluster import routes as cluster_routes  # noqa: F401  인스턴스·소유권 조회
+
+__all__ = ["database", "get_db"]

@@ -1,0 +1,230 @@
+# 로컬(Windows/Docker Desktop) 실행용 구성 — 2026-09-21
+#
+# 원본 docker-compose.yml 은 현장 관제 PC(Linux) 전제다:
+#   - backend 가 network_mode: host
+#   - DB 는 외부(192.168.0.x)에 있다고 가정, db 서비스 없음
+# 이 파일은 그 둘을 이 노트북에 맞게 바꾼 독립 구성이다. 원본은 건드리지 않는다.
+#
+#   docker compose -f docker-compose.local.yml -p und-control up -d --build
+#
+# bridge 네트워크로도 로봇 통신이 되는 이유: polling 은 같은 소켓에서
+# sendto → recvfrom 하는 req/resp 구조라(robot_io/polling.py) NAT conntrack 으로
+# 응답이 돌아온다. 호스트에 10.21.31.0/24 → 10.21.41.1 라우트가 있어야 한다.
+
+name: und-control
+
+services:
+  db:
+    image: mariadb:10.11
+    container_name: control-db
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+    environment:
+      - MARIADB_ROOT_PASSWORD=${DB_ROOT_PASSWORD:-1234}
+      - MARIADB_DATABASE=${DB_NAME:-control_system_dev}
+      - TZ=Asia/Seoul
+    ports:
+      - "${DB_HOST_PORT:-3307}:3306"
+    volumes:
+      - db_data:/var/lib/mysql        # 기존 und-control_db_data 를 그대로 재사용
+    healthcheck:
+      test: ["CMD-SHELL", "mariadb-admin ping -h 127.0.0.1 -u root -p\"$$MARIADB_ROOT_PASSWORD\" --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+    restart: unless-stopped
+
+  backend:
+    build: ./Backend
+    container_name: control-backend
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      - TZ=Asia/Seoul
+      - PORT=${BACKEND_PORT:-8010}
+      # APP_ENV 와 스키마가 어긋나면 db_url.py 가 기동을 거부한다.
+      - APP_ENV=${APP_ENV:-dev}
+      # 외부 DB(예: 192.168.0.21)를 쓰려면 .env 에 DATABASE_URL 을 통째로 넣는다(재빌드 불필요).
+      # 이때 내장 db 는 필요 없으므로 up 에 --no-deps backend mediamtx frontend 를 준다.
+      - DATABASE_URL=${DATABASE_URL:-mysql+pymysql://root:${DB_ROOT_PASSWORD:-1234}@db:3306/${DB_NAME:-control_system_dev}?charset=utf8mb4&connect_timeout=5&read_timeout=10&write_timeout=10}
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:?JWT_SECRET_KEY 가 .env 에 설정되어야 합니다}
+      - AGENT_TOKEN=${AGENT_TOKEN:-}
+      - RTSP_TRANSPORT=${RTSP_TRANSPORT:-tcp}
+      # 로봇/NOS
+      - ROBOT_IP=${ROBOT_IP:-10.21.31.103}
+      - ROBOT_PORT=${ROBOT_PORT:-30000}
+      - RECEIVER_IP=${RECEIVER_IP:-}
+      - RECEIVER_PORT=${RECEIVER_PORT:-40000}
+      - RECEIVER_TCP_PORT=${RECEIVER_TCP_PORT:-40001}
+      - NOS_HOST=${NOS_HOST:-10.21.31.106}
+      - NOS_PORT=${NOS_PORT:-22}
+      - NOS_USER=${NOS_USER:-}
+      - NOS_PASSWORD=${NOS_PASSWORD:-}
+      # 매핑 시작 시 relay_map.py 자동 기동 (9fdd072 신규 기능)
+      # 릴레이 호스트(relay_map.py 실행 장비) — 비우면 NOS_* 를 그대로 쓴다
+      - RELAY_HOST=${RELAY_HOST:-}
+      - RELAY_PORT=${RELAY_PORT:-}
+      - RELAY_USER=${RELAY_USER:-}
+      - RELAY_PASSWORD=${RELAY_PASSWORD:-}
+      - NOS_RELAY_SCRIPT=${NOS_RELAY_SCRIPT:-/home/user/Control_system/relay_map.py}
+      - NOS_ROS2_SETUP=${NOS_ROS2_SETUP:-/opt/robot/scripts/setup_ros2.sh}
+      - NOS_RELAY_LOG=${NOS_RELAY_LOG:-/tmp/relay_map.log}
+      - FLOOR_TRANSITION_ASSISTED=${FLOOR_TRANSITION_ASSISTED:-true}
+      # 자동 우회(경유지 끼우기)를 끌 맵 ID, 쉼표 구분 — 예: 43(관공서 3F)
+      - AUTO_DETOUR_DISABLED_MAPS=${AUTO_DETOUR_DISABLED_MAPS:-}
+      # 맵 관리에서 그린 구간을 따라 길을 찾을 맵 ID, 쉼표 구분 — 예: 43(관공서 3F)
+      - ROUTE_GRAPH_MAPS=${ROUTE_GRAPH_MAPS:-}
+      - ROUTE_GRAPH_ALWAYS_MAPS=${ROUTE_GRAPH_ALWAYS_MAPS:-}
+      # 통과 지점(경유지) 연속 주행 — receiver(NOS) NAV_CONTINUE_SKIP_RESET=1 을 먼저 켤 것
+      - NAV_CONTINUOUS_PASS=${NAV_CONTINUOUS_PASS:-false}
+      # 다지점 NAV — 통과 지점을 멈출 곳까지 묶어 1건으로(NOS receiver NAV_MULTI 배포 후, 2026-10-20)
+      - NAV_MULTIPOINT_ENABLED=${NAV_MULTIPOINT_ENABLED:-false}
+      # 경유지 방향 안내를 도착 몇 초 전에 들리게 할지(속도 × (초 + 전달 지연), 최소 2m). 0 이면 2m 고정(2026-10-28)
+      - NAV_CUE_LEAD_SEC=${NAV_CUE_LEAD_SEC:-3.0}
+      - NAV_CUE_DELAY_SEC=${NAV_CUE_DELAY_SEC:-2.5}
+      # 출발 제자리 회전(2026-10-28) — 진행 방향과 이 각도(도) 이상 다르면 먼저 돌고 출발. 0 = 끔
+      - NAV_DEPART_TURN_DEG=${NAV_DEPART_TURN_DEG:-45}
+      - GUIDE_START_FACE_DEG=${GUIDE_START_FACE_DEG:-20}
+      # 출발 구간 저속(2026-10-28) — 서 있다가 출발할 때 첫 구간(3m 이하)만 저속. false = 끔
+      - NAV_SOFT_START=${NAV_SOFT_START:-true}
+      # 노드망 경로(2026-10-22 반영) — 맵마다 그린 노드망을 따라 이동. 실기 확인 뒤 .env 로 켠다
+      - NODE_ROUTING_ENABLED=${NODE_ROUTING_ENABLED:-false}
+      # 안내 중 장애물 정지·멘트·자동 재개(2026-10-29) — NOS 감지 노드(obstacle_guard.py) 필요. 실기 확인 뒤 .env 로 켠다
+      - OBSTACLE_GUARD_ENABLED=${OBSTACLE_GUARD_ENABLED:-false}
+      # off|record|on — record: 안내 시나리오 이동 중 감지 노드가 판단·기록만(정지 안 함), on: 실제 정지. 비우면 ENABLED 를 따름
+      - OBSTACLE_GUARD_MODE=${OBSTACLE_GUARD_MODE:-}
+      - OBSTACLE_GUARD_PORT=${OBSTACLE_GUARD_PORT:-40100}
+      - OBSTACLE_ANNOUNCE_SEC=${OBSTACLE_ANNOUNCE_SEC:-0}
+      - OBSTACLE_SETTLE_SEC=${OBSTACLE_SETTLE_SEC:-1.5}
+      # 이 초 넘게 멈췄다 풀리면 출발 전에 손님에게 '준비됐어요' 를 묻는다. 0 = 늘 묻기(시연, ANNOUNCE 1.5 와 함께)
+      - OBSTACLE_ASK_AFTER_SEC=${OBSTACLE_ASK_AFTER_SEC:-30}
+      - OBSTACLE_STAFF_SEC=${OBSTACLE_STAFF_SEC:-120}
+      # 직원 호출 뒤 대기 안내 반복 간격(초) — 그 뒤엔 관제 처리까지 대기(자동 종료 없음, 10-30)
+      - OBSTACLE_STAFF_REPEAT_SEC=${OBSTACLE_STAFF_REPEAT_SEC:-45}
+      # 전방 카메라 사람 인식(vision 컨테이너) — 켜면 안내 시나리오 이동 중 카메라 서비스에도 켜기 신호(10-29 C1 기록 단계)
+      - OBSTACLE_CAMERA_ENABLED=${OBSTACLE_CAMERA_ENABLED:-false}
+      - OBSTACLE_CAMERA_HOST=${OBSTACLE_CAMERA_HOST:-vision}
+      - OBSTACLE_CAMERA_PORT=${OBSTACLE_CAMERA_PORT:-40110}
+      # 노드망 다지점 주행 모드 straight(직선)|auto(자율) — 직선은 회전 뒤 0→1.2m/s 급출발(10-29), 자율은 최고 1.0·걸으며 회전
+      - NODE_NAV_MODE=${NODE_NAV_MODE:-straight}
+      # 자율 모드에서 N° 이상 꺾는 통과 점은 다음 구간 방향을 줘 서서 돌게 함(걸으며 크게 도는 반경 대응, 10-29). 0 끔
+      - NODE_AUTO_TURN_STOP_DEG=${NODE_AUTO_TURN_STOP_DEG:-0}
+        # 직선 다지점 저속 보정 — 0 끔, N° 이상 꺾인 뒤 구간과 첫 구간을 저속(180 = 첫 구간만). 급출발·앞바퀴 들림 대응(10-29)
+      - NAV_TURN_SLOW_DEG=${NAV_TURN_SLOW_DEG:-0}
+      - NAV_KEEP_GAIT_ON_ARRIVAL=${NAV_KEEP_GAIT_ON_ARRIVAL:-false}
+      - NAV_PRIME_ON_SESSION_START=${NAV_PRIME_ON_SESSION_START:-true}
+      - NAV_KEEP_GAIT_START_TIMEOUT_MS=${NAV_KEEP_GAIT_START_TIMEOUT_MS:-6000}
+      # 도크 대신 세워 두고 끄는 주차 장소 이름(쉼표 구분) — 그 근처에서 켜면 장소 좌표로 위치를 넣는다. 비우면 끔
+      - AUTO_INIT_POSE_PARK_PLACES=${AUTO_INIT_POSE_PARK_PLACES:-}
+      - AUTO_INIT_POSE_PARK_RADIUS_M=${AUTO_INIT_POSE_PARK_RADIUS_M:-1.0}
+      # 측위 상실 자동 재측위(미확정·제자리면 스캔으로 위치를 찾아 넣음, 확정은 운영자). 0 이면 끔
+      - AUTO_RELOCALIZE_ENABLED=${AUTO_RELOCALIZE_ENABLED:-1}
+      # 카메라 송출 상태 조회(/camera/stream-status) — 없으면 화면 재연결이 영상 복귀를 모른다
+      - MEDIAMTX_API=${MEDIAMTX_API:-http://mediamtx:9997}
+      # ARM_MOCK 은 의도적으로 뺐다 — RM 팔 미연결이므로 가짜 상태를 띄우지 않는다.
+    ports:
+      - "${BACKEND_PORT:-8010}:${BACKEND_PORT:-8010}"
+    volumes:
+      - ./Backend/data:/app/data
+      - ./Backend/static:/app/static
+      - ./backend_logs:/backend_logs
+      # 녹화 영상·썸네일 — 컨테이너 안에만 두면 재생성 때 사라진다(11-03)
+      - ./Backend/recordings:/app/recordings
+    healthcheck:
+      # slim 이미지에 curl 이 없어 python 으로 확인한다. start.bat 이 이 상태를 기다린다.
+      test: ["CMD-SHELL", "python -c \"import os,urllib.request;urllib.request.urlopen('http://127.0.0.1:'+os.environ.get('PORT','8010')+'/api',timeout=5)\""]
+      interval: 10s
+      timeout: 8s
+      retries: 30
+      start_period: 60s
+    restart: unless-stopped
+
+  mediamtx:
+    # 이 로봇 RTSP 는 실측 H.265 라, 저장소의 무재인코딩(Tier 2) 설정 대신
+    # ffmpeg 재인코딩 체인을 쓴다(브라우저가 H.265 를 WebRTC 로 못 받는다).
+    image: bluenviron/mediamtx:latest-ffmpeg
+    container_name: control-mediamtx
+    volumes:
+      - ./mediamtx/mediamtx.local.yml:/mediamtx.yml:ro
+    ports:
+      - "8889:8889"          # WebRTC(WHEP)
+      - "8189:8189/udp"      # WebRTC ICE UDP mux
+      # 디버그 API — 호스트 9997 은 윈도우 예약범위(9911-10010).
+      # 이 PC 에서만 연다: API 는 도커 망(172.x)에 허용돼 있고, 외부 접속도 172.x 로 보인다.
+      - "127.0.0.1:19997:9997"
+    restart: unless-stopped
+
+  # 전방 카메라 사람 인식 — C1 기록 단계(2026-10-29). backend 이미지 재사용(ultralytics·OpenCV 들어 있음, 재빌드 없음).
+  # 관제 OBSTACLE_CAMERA_ENABLED 가 켜져 있고 안내 시나리오 이동 중일 때만 인식·기록한다. 로봇을 멈추지 않는다.
+  # 영상은 MediaMTX 가 이미 받는 로봇 원본(video1_src)을 도커 망 안에서 읽는다. 기록: ./vision_rec/<시각>/
+  # 올리기: docker compose -f docker-compose.local.yml -p und-control up -d --no-deps vision
+  vision:
+    image: und-control-backend:latest
+    pull_policy: never
+    container_name: control-vision
+    restart: unless-stopped
+    depends_on:
+      - mediamtx
+    command: ["python", "/vision/front_person_watch.py"]
+    environment:
+      - VISION_RTSP_URL=${VISION_RTSP_URL:-rtsp://mediamtx:8554/video1_src}
+      - VISION_HZ=${VISION_HZ:-10}
+      - VISION_IMGSZ=${VISION_IMGSZ:-416}
+      - VISION_CONF=${VISION_CONF:-0.35}
+      - VISION_REC_MAX_MB=${VISION_REC_MAX_MB:-500}
+      # C3: 사람 위치를 NOS 장애물 감지 노드로 보낸다(중계기와 같은 NOS). 비우면 보내지 않음
+      - VISION_NOS_HOST=${RECEIVER_IP:-}
+      - VISION_NOS_PORT=${OBSTACLE_GUARD_PORT:-40100}
+      - YOLO_OFFLINE=1
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - ./robot_vision:/vision:ro
+      - ./vision_rec:/rec
+    cpus: 2.0
+
+  # 로봇 로그 수집(11-05) — NOS·본체·Jetson 기록을 1분/5분마다 이어 받아 ./backend_logs/robot/<날짜>/ 에 90일 보관(읽기 전용).
+  # 관제 백엔드 이미지를 그대로 쓰고 코드만 읽기 전용으로 연결한다(빌드 없음). 백엔드 배포·재시작과 무관하게 돈다.
+  # 올리기: docker compose -f <이 파일> -p und-control up -d --no-deps robotlog   · 쓰는 법: tools/robotlog/robotlog.py
+  robotlog:
+    image: und-control-backend:latest
+    pull_policy: never
+    container_name: control-robotlog
+    restart: unless-stopped
+    command: ["python", "/robotlog/collector.py"]
+    environment:
+      - TZ=Asia/Seoul
+      - PYTHONUNBUFFERED=1
+      - NOS_PORT=${NOS_PORT:-22}
+      - NOS_USER=${NOS_USER:-}
+      - NOS_PASSWORD=${NOS_PASSWORD:-}
+      - ROBOTLOG_RETENTION_DAYS=${ROBOTLOG_RETENTION_DAYS:-90}
+      - ROBOTLOG_FAST_SEC=${ROBOTLOG_FAST_SEC:-60}
+      - ROBOTLOG_SLOW_SEC=${ROBOTLOG_SLOW_SEC:-300}
+      - ROBOTLOG_EVENT_MAX_PER_DAY=${ROBOTLOG_EVENT_MAX_PER_DAY:-40}
+      - ROBOTLOG_JETSON_HOST=${ROBOTLOG_JETSON_HOST:-}
+      - ROBOTLOG_JETSON_USER=${ROBOTLOG_JETSON_USER:-und02}
+    volumes:
+      - ./tools/robotlog:/robotlog:ro
+      - ./backend_logs/robot:/data
+      # Jetson SSH 키 하나만 읽기 전용(비우면 Jetson 은 수집 안 함 — 빈 폴더가 연결됨)
+      - ${ROBOTLOG_JETSON_KEY:-./tools/robotlog/no-key}:/keys/jetson:ro
+    cpus: 0.25
+    mem_limit: 128m
+
+  frontend:
+    build:
+      context: ./Frontend
+      args:
+        NEXT_PUBLIC_MEDIAMTX_HOST: ${NEXT_PUBLIC_MEDIAMTX_HOST:-}
+    container_name: control-frontend
+    depends_on:
+      - backend
+    ports:
+      - "${FRONTEND_PORT:-3001}:3001"
+    restart: unless-stopped
+
+volumes:
+  db_data:

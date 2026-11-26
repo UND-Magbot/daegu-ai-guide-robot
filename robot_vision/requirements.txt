@@ -1,0 +1,8 @@
+# robot_vision/thermal_max_overlay.py 전용 의존성.
+# 관제 서버(Backend)는 YOLO를 쓰지 않으므로 여기서만 설치한다
+# (ultralytics는 torch를 끌고 와서 이미지가 수 GB 커진다).
+ultralytics
+opencv-python
+numpy
+requests==2.31.0
+urllib3==1.26.20

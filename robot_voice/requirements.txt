@@ -1,0 +1,9 @@
+# robot_voice 전용 의존성 (Jetson 에서 설치)
+#   pip3 install -r requirements.txt
+#
+# sounddevice 는 PortAudio 가 필요하다:
+#   sudo apt install -y libportaudio2 python3-dev
+openai>=1.40
+sounddevice>=0.4.6
+numpy
+requests>=2.31

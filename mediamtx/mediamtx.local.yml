@@ -1,0 +1,81 @@
+# 관제 카메라 송출 — 로봇 RTSP(H.265) → H.264 재인코딩 → WebRTC(WHEP) :8889
+#
+#   로봇 RTSP(H.265)
+#     → videoN_src   (source: rtsp://10.21.31.103:8554/videoN)
+#        ↓ runOnReady: ffmpeg 재인코딩(H.264, zerolatency)
+#     → videoN       (source: publisher)
+#        → WebRTC(WHEP) :8889 → 브라우저
+#
+# 브라우저는 H.265 를 WebRTC 로 못 받는다. 그래서 재인코딩 단계가 필수다.
+# 설정은 핫리로드되지 않는다 — 바꾼 뒤 반드시 `docker restart control-mediamtx`.
+
+logLevel: info
+
+api: yes
+apiAddress: :9997
+
+# 관제 백엔드(다른 컨테이너)가 /v3/paths/list 로 송출 상태(ready)를 읽는다 —
+# 화면 카메라 재연결이 이 값을 보고 "영상이 돌아오면 다시 붙는다". 2026-10-11
+# 기본값은 API 를 127.0.0.1 에서만 허용해 백엔드 요청이 401 로 막혔다.
+# 이 목록을 쓰면 기본값을 통째로 대체하므로 publish/read/playback 도 함께 적는다.
+# 172.16.0.0/12 는 도커 망 — 호스트 포트(19997)는 compose 에서 127.0.0.1 로만 연다.
+authInternalUsers:
+  - user: any
+    pass:
+    ips: []
+    permissions:
+      - action: publish
+      - action: read
+      - action: playback
+  - user: any
+    pass:
+    ips: ['127.0.0.1', '::1', '172.16.0.0/12']
+    permissions:
+      - action: api
+
+# WebRTC — 컨테이너는 172.x 사설 IP만 보므로 ICE 후보에 호스트 주소를 직접 알려준다.
+# 관제 PC 주소가 바뀌면 이 목록도 같이 고쳐야 한다.
+webrtc: yes
+webrtcAddress: :8889
+webrtcLocalUDPAddress: :8189
+webrtcAdditionalHosts: [127.0.0.1, 172.30.1.58, 192.168.20.58, 10.21.41.61]
+
+# 내부 재인코딩 결과를 되받는 용도. 외부에 노출하지 않는다.
+rtsp: yes
+rtspAddress: :8554
+rtmp: no
+hls: no
+srt: no
+
+paths:
+  # ── 카메라 1 ──────────────────────────────────────────
+  video1_src:
+    source: rtsp://10.21.31.103:8554/video1
+    rtspTransport: tcp
+    # no  = 뷰어가 없어도 항상 당김(송출 ON)
+    # yes = 안 당김(송출 OFF, 주행 테스트 시 로봇망 부하 분리)
+    sourceOnDemand: no
+    runOnReady: >
+      ffmpeg -nostdin -loglevel warning
+      -rtsp_transport tcp -i rtsp://127.0.0.1:8554/video1_src
+      -an -c:v libx264 -preset ultrafast -tune zerolatency
+      -profile:v baseline -pix_fmt yuv420p -g 30 -b:v 2M
+      -f rtsp -rtsp_transport tcp rtsp://127.0.0.1:8554/video1
+    runOnReadyRestart: yes
+  video1:
+    source: publisher
+
+  # ── 카메라 2 ──────────────────────────────────────────
+  video2_src:
+    source: rtsp://10.21.31.103:8554/video2
+    rtspTransport: tcp
+    sourceOnDemand: no
+    runOnReady: >
+      ffmpeg -nostdin -loglevel warning
+      -rtsp_transport tcp -i rtsp://127.0.0.1:8554/video2_src
+      -an -c:v libx264 -preset ultrafast -tune zerolatency
+      -profile:v baseline -pix_fmt yuv420p -g 30 -b:v 2M
+      -f rtsp -rtsp_transport tcp rtsp://127.0.0.1:8554/video2
+    runOnReadyRestart: yes
+  video2:
+    source: publisher

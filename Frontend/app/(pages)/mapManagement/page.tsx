@@ -1,0 +1,3417 @@
+"use client";
+
+import React, { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { useSearchParams } from "next/navigation";
+import PermissionGuard from "@/app/components/common/PermissionGuard";
+import styles from "./mapManagement.module.css";
+import PlaceList from "./components/tabs/place/PlaceManageTab";
+import PathList from "./components/tabs/path/PathManageTab";
+import FacilityTab from "./components/tabs/facility/FacilityTab";
+import MapPlaceCreateModal, { type NodeAttach, type NodeChoice } from "./components/tabs/map/MapPlaceCreateModal";
+import type { PendingPlace, PlaceEditData } from "./components/tabs/map/MapPlaceCreateModal";
+import { getCategoryStyle, ROBOT_MARKER_FILL, ROBOT_MARKER_STROKE } from "@/app/components/map/poiStyle";
+import type { RobotRowData, Floor } from "@/app/types";
+import { apiFetch } from "@/app/lib/api";
+import { API_BASE } from "@/app/config";
+import { usePageReady } from "@/app/context/PageLoadingContext";
+import { useModalAlert } from "@/app/hooks/useModalAlert";
+import { useAuth } from "@/app/context/AuthContext";
+import MapAlertModal from "@/app/components/modal/AlertModal";
+import InitPoseConfirmModal from "@/app/components/modal/InitPoseConfirmModal";
+import RelocalizeModal from "@/app/components/modal/RelocalizeModal";
+import { useFloorMapConfig, type FloorMapRow } from "@/app/(pages)/mapManagement/hooks/useFloorMapConfig";
+import type {
+  MapTab,
+  MappingState,
+  Business,
+  FloorItem,
+  RobotMap,
+  Robot,
+  RouteDirection,
+  RouteSegment,
+  DbRoute,
+  UndoAction,
+  MapPlaceRow,
+} from "./types/map";
+import { useRobotPolling } from "./hooks/useRobotPolling";
+import { useMapMeta } from "./hooks/useMapMeta";
+import { useSvgPanZoom } from "./hooks/useSvgPanZoom";
+import { useMappingWebSocket } from "./hooks/useMappingWebSocket";
+import { usePlaceDelete } from "./hooks/usePlaceDelete";
+import { usePathBuilding } from "./hooks/usePathBuilding";
+import { useRouteCreation } from "./hooks/useRouteCreation";
+import { processMapImage } from "./utils/processMapImage";
+import RobotConnectModal from "./components/tabs/map/RobotConnectModal";
+import MapSyncModal from "./components/tabs/map/MapSyncModal";
+import MapSyncProgressModal from "./components/tabs/map/MapSyncProgressModal";
+import type { RobotSyncState } from "./components/tabs/map/MapSyncProgressModal";
+import MappingStartModal from "./components/tabs/map/MappingStartModal";
+import MappingProgressModal from "./components/tabs/map/MappingProgressModal";
+import MappingSuccessModal from "./components/tabs/map/MappingSuccessModal";
+import PathBuildPanel from "./components/tabs/map/PathBuildPanel";
+import MapToolbar from "./components/tabs/map/MapToolbar";
+import ImportMapModal from "./components/tabs/map/ImportMapModal";
+import MapRightPanel from "./components/tabs/map/MapRightPanel";
+import NodeLayer from "./components/tabs/map/NodeLayer";
+import NodeEditPanel, { nodeLabel, type NodeTool } from "./components/tabs/map/NodeEditPanel";
+import { useNavNodes } from "./hooks/useNavNodes";
+import { toMoveBlock } from "@/app/lib/navReach";
+import { Waypoints } from "lucide-react";
+
+/** FastAPI 오류 응답에서 사용자에게 보여줄 문구를 뽑는다(422 는 detail 이 배열). */
+function detailMessage(err: unknown): string {
+  const detail = (err as { detail?: unknown } | null)?.detail;
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail)) {
+    const msgs = detail
+      .map((d) => (typeof d?.msg === "string" ? d.msg.replace(/^Value error, /, "") : ""))
+      .filter(Boolean);
+    if (msgs.length > 0) return msgs.join("\n");
+  }
+  return "";
+}
+
+export default function MapManagementPage() {
+  const setPageReady = usePageReady();
+  const { modal, modalAlert, modalConfirm, closeModal, handleConfirm } = useModalAlert();
+  const readyFlags = useRef({ robots: false, maps: false });
+  const checkReady = () => {
+    if (readyFlags.current.robots && readyFlags.current.maps) setPageReady();
+  };
+  // ── URL query에서 초기 탭 결정 ──
+  const searchParams = useSearchParams();
+  const rawTab = searchParams.get("tab") || "map";
+  // 시설 장치 탭으로 일반화되기 전의 딥링크(?tab=elevator)를 그대로 받는다.
+  const initialTab = (rawTab === "elevator" ? "facility" : rawTab) as MapTab;
+  const [activeTab, setActiveTab] = useState<MapTab>(
+    ["map", "place", "path", "facility"].includes(initialTab) ? initialTab : "map"
+  );
+
+  // ── 탭 권한 필터 (DB menu_info 기반) ──
+  const { hasPermission, isMenuVisible, menuIndex } = useAuth();
+  const mapTabs = useMemo(() => {
+    const all: { id: MapTab; menuKey: string; fallback: string }[] = [
+      { id: "map",   menuKey: "map-edit",   fallback: "맵 편집" },
+      { id: "place", menuKey: "place-list", fallback: "장소 목록" },
+      { id: "path",  menuKey: "path-list",  fallback: "경로 목록" },
+    ];
+    const tabs = all
+      .filter((t) => hasPermission(t.menuKey) && isMenuVisible(t.menuKey))
+      .map((t) => ({
+        id: t.id,
+        label: menuIndex.get(t.menuKey)?.label ?? t.fallback,
+      }));
+    // 시설 장치(엘리베이터·자동문) 탭 — 맵 편집(map-edit) 권한 재사용, 고정 라벨.
+    // 설비 유형이 늘어도 탭은 늘리지 않는다(유형 칩으로 분기).
+    if (hasPermission("map-edit") && isMenuVisible("map-edit")) {
+      tabs.push({ id: "facility", label: "시설 장치" });
+    }
+    return tabs;
+  }, [hasPermission, isMenuVisible, menuIndex]);
+
+  // 권한 필터링으로 현재 탭이 사라지면 첫 탭으로 복귀
+  useEffect(() => {
+    if (mapTabs.length > 0 && !mapTabs.some((t) => t.id === activeTab)) {
+      setActiveTab(mapTabs[0].id);
+    }
+  }, [mapTabs, activeTab]);
+
+  // ── PlaceList / PathList 용 데이터 ──
+  const [tabRobots, setTabRobots] = useState<RobotRowData[]>([]);
+  const [tabFloors, setTabFloors] = useState<Floor[]>([]);
+
+  useEffect(() => {
+    const fetchTabRobots = async () => {
+      try {
+        const res = await apiFetch(`/DB/robots`);
+        if (!res.ok) return;
+        const raw = await res.json();
+        const mapped: RobotRowData[] = raw.map((item: any) => ({
+          id: item.id,
+          no: item.RobotName ?? "",
+          type: item.robot_type ?? "",
+          info: item.RobotName ?? "",
+          battery: item.battery ?? 0,
+          batteryLeft: item.BatteryLeft ?? undefined,
+          batteryRight: item.BatteryRight ?? undefined,
+          return: item.LimitBattery ?? 30,
+          isCharging: item.is_charging ?? false,
+          network: item.network ?? "Online",
+          power: item.power ?? "On",
+          mark: item.mark ?? "No",
+          tasks: Array.isArray(item.tasks) ? item.tasks : [],
+          errors: Array.isArray(item.errors) ? item.errors : [],
+          chargingTime: item.charging_time ?? 0,
+          waitingTime: item.waiting_time ?? 0,
+          dockingTime: item.docking_time ?? 0,
+          operator: item.ProductCompany ?? "",
+          serialNumber: item.SerialNumber ?? "",
+          model: item.ModelName ?? "",
+          group: item.Group ?? "",
+          softwareVersion: item.SWversion ?? "",
+          site: item.Site ?? "",
+          registrationDateTime: item.CreatedAt ?? "",
+        }));
+        setTabRobots(mapped);
+      } catch (e) {
+        console.error("로봇 데이터 로드 실패:", e);
+      } finally {
+        readyFlags.current.robots = true;
+        checkReady();
+      }
+    };
+    fetchTabRobots();
+  }, []);
+
+  // tabFloors를 floor_info에서 로드
+  useEffect(() => {
+    apiFetch(`/map/floors`)
+      .then((res) => res.ok ? res.json() : [])
+      .then((data: { id: number; FloorName: string }[]) => {
+        setTabFloors(data.map((a) => ({ id: a.id, label: a.FloorName })));
+      })
+      .catch(() => {});
+  }, []);
+
+  // ── 사업장 / 층 / 영역(맵) 데이터 ──
+  const [businesses, setBusinesses] = useState<Business[]>([]);
+  const [floors, setFloors] = useState<FloorItem[]>([]);
+  const [maps, setMaps] = useState<RobotMap[]>([]);
+  const [selectedBiz, setSelectedBiz] = useState<number | "">("");
+  const [selectedFloor, setSelectedFloor] = useState<number | "">("");
+  const [selectedMap, setSelectedMap] = useState<number | "">("");
+
+  // ── 맵핑 상태 ──
+  const [mappingState, setMappingState] = useState<MappingState>("idle");
+  const [rightPanelOpen, setRightPanelOpen] = useState(true);
+
+  // ── 로봇 연결 ──
+  const [showRobotModal, setShowRobotModal] = useState(false);
+  const [robots, setRobots] = useState<Robot[]>([]);
+  const [connectedRobots, setConnectedRobots] = useState<Robot[]>([]);
+  const [selectedInitPoseRobot, setSelectedInitPoseRobot] = useState<Robot | null>(null);
+  const [selectedConnectIds, setSelectedConnectIds] = useState<number[]>([]);
+  const [robotListLoading, setRobotListLoading] = useState(false);
+
+  // ── 가져오기 (로봇 내부 맵 → 관제 등록) ──
+  const [showImportModal, setShowImportModal] = useState(false);
+  const [importRobots, setImportRobots] = useState<Robot[]>([]);
+
+  // ── 동기화 (맵 적용) ──
+  const [showSyncModal, setShowSyncModal] = useState(false);
+  const [syncRobots, setSyncRobots] = useState<Robot[]>([]);
+  const [selectedSyncIds, setSelectedSyncIds] = useState<number[]>([]);
+  const [syncProgressStates, setSyncProgressStates] = useState<RobotSyncState[]>([]);
+  const [showSyncProgressModal, setShowSyncProgressModal] = useState(false);
+  const [robotPos, setRobotPos] = useState<{ x: number; y: number; yaw: number } | null>(null);
+
+  // ── 맵 메타 (origin, resolution) — 훅으로 분리 ──
+  const mapMeta = useMapMeta(selectedMap);
+  // 위치 재조정(스캔 정합) 모달용 CanvasMap 설정 — 현재 선택 맵 기준.
+  const relocalizeMapConfig = useFloorMapConfig(
+    typeof selectedMap === "number" ? selectedMap : null,
+    maps as unknown as FloorMapRow[],
+  );
+
+  // ── 맵 위 장소 목록 ──
+  const [mapPlaces, setMapPlaces] = useState<MapPlaceRow[]>([]);
+
+  // overrides: 저장에 실패한 수정분(id→화면 값). 다시 불러온 DB 값이 이를 덮으면
+  // 고친 방향·이름 등이 사라지고 재저장 시 옛 값이 나가므로 화면 값을 다시 얹는다.
+  // 맵을 빠르게 바꾸면 늦게 온 이전 맵 응답이 새 맵 목록을 덮었다. 마지막 요청만 반영한다.
+  const placesReqSeq = useRef(0);
+  const loadMapPlaces = useCallback(async (mapId: number, overrides?: Map<number, MapPlaceRow>) => {
+    const seq = ++placesReqSeq.current;
+    try {
+      const res = await apiFetch(`/DB/places?map_id=${mapId}`);
+      const data = await res.json();
+      if (seq !== placesReqSeq.current) return;
+      const rows: MapPlaceRow[] = Array.isArray(data) ? data : [];
+      setMapPlaces(overrides?.size ? rows.map((p) => overrides.get(p.id) ?? p) : rows);
+    } catch (e) {
+      console.error("장소 로드 실패:", e);
+      setMapPlaces([]);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (selectedMap === "") {
+      setMapPlaces([]);
+      return;
+    }
+    loadMapPlaces(selectedMap as number);
+  }, [selectedMap, loadMapPlaces]);
+
+  // ── 사업장 전체 장소명 (중복 사전 검사용) ──
+  // 서버는 경로가 장소를 '이름'으로 찾는 탓에 사업장 내 장소명 중복을 409 로 막는다.
+  // 저장 시점에 알면 늦으므로 등록 모달에서 미리 걸러낸다.
+  const [takenPlaces, setTakenPlaces] = useState<{ id: number; name: string }[]>([]);
+  const loadTakenPlaces = useCallback(async () => {
+    try {
+      const res = await apiFetch(`/DB/places`);
+      const data = await res.json();
+      setTakenPlaces(
+        Array.isArray(data)
+          ? data.map((p: { id: number; LacationName?: string }) => ({ id: p.id, name: String(p.LacationName ?? "") }))
+          : []
+      );
+    } catch (e) {
+      console.error("장소명 목록 로드 실패:", e);
+      setTakenPlaces([]);
+    }
+  }, []);
+  useEffect(() => {
+    loadTakenPlaces();
+  }, [loadTakenPlaces]);
+
+  // ── 미저장 장소 (맵 위 임시) ──
+  const [pendingPlaces, setPendingPlaces] = useState<PendingPlace[]>([]);
+
+  // ── 상단 저장 진행 중 ──
+  const savingAllRef = useRef(false);
+  const [isSavingAll, setIsSavingAll] = useState(false);
+
+  // ── 되돌리기 스택 ──
+  const [undoStack, setUndoStack] = useState<UndoAction[]>([]);
+
+  const resetNodeMode = () => {
+    setIsNodeMode(false);
+    setLinkFromKey(null);
+    setDoorPair(null);
+    setNodeRoute(null);
+    setSelectedEdge(null);
+  };
+
+  const clearAllModes = () => {
+    setIsPlaceMode(false);
+    resetNodeMode();
+    resetDeleteMode();
+    resetRouteMode();
+    resetPathBuild();
+  };
+
+  const handleUndo = () => {
+    clearAllModes();
+    if (undoStack.length === 0) return;
+    const action = undoStack[undoStack.length - 1];
+    // 상태 변경은 갱신 함수 밖에서 한다. 갱신 함수 안에서 하면 개발 모드(StrictMode)가 두 번 실행해
+    // 지운 구간이 두 개로 되살아났다(2026-10-16).
+    setUndoStack((prev) => prev.slice(0, -1));
+    switch (action.type) {
+      case "addPlace":
+        setPendingPlaces((pp) => pp.filter((p) => p.tempId !== action.tempId));
+        break;
+      case "deletePendingPlace":
+        setPendingPlaces((pp) => [...pp, action.place]);
+        if (action.cascadedDbRoutes.length > 0)
+          setDeletedRouteDbIds((ids) => { const next = new Set(ids); action.cascadedDbRoutes.forEach((id) => next.delete(id)); return next; });
+        if (action.cascadedPendingRoutes.length > 0)
+          setPendingRoutes((pr) => [...pr, ...action.cascadedPendingRoutes]);
+        break;
+      case "deleteDbPlace":
+        setDeletedDbIds((ids) => { const next = new Set(ids); next.delete(action.id); return next; });
+        if (action.cascadedDbRoutes.length > 0)
+          setDeletedRouteDbIds((ids) => { const next = new Set(ids); action.cascadedDbRoutes.forEach((id) => next.delete(id)); return next; });
+        if (action.cascadedPendingRoutes.length > 0)
+          setPendingRoutes((pr) => [...pr, ...action.cascadedPendingRoutes]);
+        break;
+      case "addRoute":
+        setPendingRoutes((pr) => pr.filter((r) => r.tempId !== action.tempId));
+        break;
+      case "deletePendingRoute":
+        setPendingRoutes((pr) => [...pr, action.route]);
+        break;
+      case "deleteDbRoute":
+        setDeletedRouteDbIds((ids) => { const next = new Set(ids); next.delete(action.id); return next; });
+        break;
+      case "mapReset":
+        setPendingPlaces(action.prevPendingPlaces);
+        setPendingRoutes(action.prevPendingRoutes);
+        setDeletedDbIds(action.prevDeletedDbIds);
+        setDeletedRouteDbIds(action.prevDeletedRouteDbIds);
+        setMovedPlaces(action.prevMovedPlaces);
+        setModifiedDbIds(action.prevModifiedDbIds);
+        break;
+      case "editPlace":
+        setMapPlaces(action.prevMapPlaces);
+        setPendingPlaces(action.prevPendingPlaces);
+        setPendingRoutes(action.prevPendingRoutes);
+        setDbRoutes(action.prevDbRoutes);
+        setMovedPlaces(action.prevMovedPlaces);
+        setModifiedDbIds(action.prevModifiedDbIds);
+        setYawPinnedPlaces(action.prevYawPinnedPlaces);
+        break;
+    }
+  };
+
+  // 맵 편집 탭의 미저장 변경사항 유무 (저장 버튼 / 탭 이탈 경고 공용)
+  const hasUnsavedMapEdits = () =>
+    pendingPlaces.length > 0 || deletedDbIds.size > 0
+    || pendingRoutes.length > 0 || deletedRouteDbIds.size > 0
+    || movedPlaces.size > 0;
+
+  // 미저장 편집 상태 폐기. 탭 재진입 시 필터·맵이 초기화되므로 남겨두면
+  // 엉뚱한 맵 위에 '저장된 것처럼 보이는' 마커가 얹힌다.
+  const discardMapEdits = () => {
+    setPendingPlaces([]);
+    setPendingRoutes([]);
+    setDeletedDbIds(new Set());
+    setDeletedRouteDbIds(new Set());
+    setMovedPlaces(new Map());
+    setModifiedDbIds(new Set());
+    setYawPinnedPlaces(new Set());
+    setUndoStack([]);
+  };
+
+  // 맵·층·사업장을 바꾸면 장소 목록을 새로 불러와 고친 값이 사라지고, 남은 미저장
+  // 구간은 바뀐 맵에 저장된다. 탭 이동처럼 확인 후 편집을 비우고 전환한다.
+  const confirmDiscardThen = (action: () => void) => {
+    if (!hasUnsavedMapEdits()) { action(); return; }
+    modalConfirm(
+      "저장하지 않은 장소·구간 변경사항이 있습니다.\n다른 맵으로 바꾸면 사라집니다. 바꾸시겠습니까?",
+      () => { clearAllModes(); discardMapEdits(); action(); }
+    );
+  };
+
+  // ── 상단 저장 버튼: 장소+구간 삭제/신규 일괄 DB 저장 ──
+  const handleSaveAll = async () => {
+    // 저장은 항목마다 요청을 차례로 보내 수 초 걸린다. 그 사이 다시 누르면 같은 목록이 또 나가
+    // 구간이 두 개씩 생겼다(2026-10-16). 화면 잠금(state)은 한 박자 늦으니 ref 로 먼저 막는다.
+    if (savingAllRef.current) return;
+    clearAllModes();
+    const hasChanges = hasUnsavedMapEdits();
+    if (!hasChanges) {
+      modalAlert("저장할 변경사항이 없습니다.");
+      return;
+    }
+    savingAllRef.current = true;
+    setIsSavingAll(true);
+
+    // 항목별로 성공/실패를 따로 처리한다. 하나가 실패해도 나머지는 저장하고,
+    // 실패한 것만 화면에 남겨 다시 시도할 수 있게 한다.
+    const failed: string[] = [];
+    // 지우려던 것이 이미 없던 항목(404). 다시 시도할 대상이 아니므로 남기지 않되,
+    // 다른 곳에서 이 맵이 바뀌었다는 뜻이라 사용자에게 따로 알린다.
+    const alreadyGone: string[] = [];
+    const keptDeletedDbIds = new Set<number>();
+    const keptDeletedRouteDbIds = new Set<number>();
+    const keptMovedPlaces = new Map<string, { x: number; y: number }>();
+    // PUT 실패한 DB 장소의 화면 값 — 다시 불러온 뒤에도 고친 방향·이름 등을 유지한다.
+    const keptPlaceEdits = new Map<number, MapPlaceRow>();
+    const keptPendingPlaces: PendingPlace[] = [];
+    const keptPendingRoutes: typeof pendingRoutes = [];
+
+    try {
+      // 삭제 성공한 장소명만 수집 (경로 정리용)
+      const deletedPlaceNames = new Set<string>();
+
+      // 장소 삭제
+      for (const id of deletedDbIds) {
+        const res = await apiFetch(`/DB/places/${id}`, { method: "DELETE" });
+        const name = mapPlaces.find((p) => p.id === id)?.LacationName;
+        if (res.ok) {
+          if (name) deletedPlaceNames.add(name);
+        } else if (res.status === 404) {
+          alreadyGone.push(`장소 "${name ?? `ID ${id}`}"`);
+        } else {
+          keptDeletedDbIds.add(id);
+          failed.push(`장소 삭제 (ID ${id})`);
+        }
+      }
+      // 구간 삭제
+      for (const id of deletedRouteDbIds) {
+        const res = await apiFetch(`/DB/routes/${id}`, { method: "DELETE" });
+        if (res.status === 404) {
+          const r = dbRoutes.find((x) => x.id === id);
+          alreadyGone.push(r ? `구간 "${r.StartPlaceName}→${r.EndPlaceName}"` : `구간 ID ${id}`);
+        } else if (!res.ok) {
+          keptDeletedRouteDbIds.add(id);
+          failed.push(`구간 삭제 (ID ${id})`);
+        }
+      }
+      // 삭제된 장소를 참조하는 경로(WayInfo) 삭제
+      if (deletedPlaceNames.size > 0) {
+        try {
+          const wayRes = await apiFetch(`/DB/getpath`);
+          if (wayRes.ok) {
+            const ways: { id: number; WayPoints: string }[] = await wayRes.json();
+            for (const way of ways) {
+              const wpNames = (way.WayPoints || "").split(" - ").map((n: string) => n.trim());
+              if (wpNames.some((n: string) => deletedPlaceNames.has(n))) {
+                await apiFetch(`/DB/path/${way.id}`, { method: "DELETE" });
+              }
+            }
+          }
+        } catch (e) {
+          console.error("경로 정리 실패:", e);
+        }
+      }
+      // 이동된 DB 장소 업데이트
+      for (const [name, coords] of movedPlaces) {
+        const dbPlace = mapPlaces.find((p) => p.LacationName === name);
+        if (!dbPlace) {
+          // 미저장 장소의 이동은 아래 신규 저장에서 반영된다. 그 밖에는 대상을 잃은 것이라 알린다.
+          if (!pendingPlaces.some((p) => p.LacationName === name)) {
+            failed.push(`장소 "${name}" 수정 (대상을 찾지 못함 — 다시 수정해 주세요)`);
+          }
+          continue;
+        }
+        if (!deletedDbIds.has(dbPlace.id)) {
+          const res: Response = await apiFetch(`/DB/places/${dbPlace.id}`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              RobotName: dbPlace.RobotName ?? "",
+              LacationName: dbPlace.LacationName,
+              FloorId: dbPlace.FloorId ?? null,
+              LocationX: Number(coords.x.toFixed(3)),
+              LocationY: Number(coords.y.toFixed(3)),
+              Yaw: Number((dbPlace.Yaw ?? 0).toFixed(3)),
+              MapId: dbPlace.MapId ?? null,
+              Category: dbPlace.Category ?? "waypoint",
+              Imformation: dbPlace.Imformation ?? null,
+            }),
+          });
+          if (!res.ok) {
+            keptMovedPlaces.set(name, coords);
+            keptPlaceEdits.set(dbPlace.id, dbPlace);
+            failed.push(`장소 "${name}" 수정`);
+          }
+        }
+      }
+      // 장소 신규 저장 (이동된 pending 장소는 좌표 반영)
+      const failedPlaceNames = new Set<string>();
+      for (const p of pendingPlaces) {
+        const { tempId, ...payload } = p;
+        const moved = movedPlaces.get(p.LacationName);
+        if (moved) {
+          payload.LocationX = Number(moved.x.toFixed(3));
+          payload.LocationY = Number(moved.y.toFixed(3));
+        }
+        const res = await apiFetch(`/DB/places`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        if (res.ok) {
+          // 저장에 반영됐으므로 이동 기록도 함께 소진한다.
+          keptMovedPlaces.delete(p.LacationName);
+        } else {
+          keptPendingPlaces.push(p);
+          failedPlaceNames.add(p.LacationName);
+          if (moved) keptMovedPlaces.set(p.LacationName, moved);
+          failed.push(`장소 "${p.LacationName}" 저장`);
+        }
+      }
+      // 경로 신규 저장 — 장소 저장이 실패한 구간은 서버에서 어차피 풀리지 않으므로 보류한다.
+      const mapId = selectedMap as number;
+      for (const r of pendingRoutes) {
+        if (failedPlaceNames.has(r.startName) || failedPlaceNames.has(r.endName)) {
+          keptPendingRoutes.push(r);
+          failed.push(`구간 "${r.startName}→${r.endName}" 저장 (장소 저장 실패로 보류)`);
+          continue;
+        }
+        const res = await apiFetch(`/DB/routes`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            MapId: mapId,
+            StartPlaceName: r.startName,
+            EndPlaceName: r.endName,
+            Direction: r.direction,
+          }),
+        });
+        if (!res.ok) {
+          keptPendingRoutes.push(r);
+          failed.push(`구간 "${r.startName}→${r.endName}" 저장`);
+        }
+      }
+
+      // 성공한 것만 비우고 실패한 것은 화면에 남긴다.
+      setPendingPlaces(keptPendingPlaces);
+      setDeletedDbIds(keptDeletedDbIds);
+      setPendingRoutes(keptPendingRoutes);
+      setDeletedRouteDbIds(keptDeletedRouteDbIds);
+      setMovedPlaces(keptMovedPlaces);
+      setModifiedDbIds(new Set(keptPlaceEdits.keys()));
+      // 일부만 반영된 뒤 되돌리면 저장된 장소가 미저장으로 되살아나 중복이 되므로 스택을 버린다.
+      setUndoStack([]);
+      const goneNote = alreadyGone.length > 0
+        ? `다른 곳에서 이미 삭제된 항목이 ${alreadyGone.length}건 있습니다.\n${alreadyGone.join("\n")}\n\n` +
+          `다른 사용자가 이 맵을 수정했을 수 있습니다. 화면을 최신 상태로 다시 불러왔으니 확인해 주세요.`
+        : "";
+      if (failed.length > 0) {
+        modalAlert(
+          `${failed.length}건을 저장하지 못했습니다.\n\n${failed.join("\n")}\n\n` +
+          `실패한 항목은 화면에 남아 있습니다. 장소명이 이미 쓰이고 있지 않은지 확인해 주세요.` +
+          (goneNote ? `\n\n${goneNote}` : "")
+        );
+      } else if (goneNote) {
+        modalAlert(`저장을 마쳤습니다. 다만 ${goneNote}`);
+      } else {
+        modalAlert("저장되었습니다.");
+      }
+      loadTakenPlaces();
+      if (selectedMap !== "") {
+        loadMapPlaces(selectedMap as number, keptPlaceEdits);
+        loadMapRoutes(selectedMap as number);
+      }
+    } catch (e) {
+      console.error(e);
+      modalAlert(e instanceof Error ? e.message : "저장 중 오류 발생");
+    } finally {
+      savingAllRef.current = false;
+      setIsSavingAll(false);
+    }
+  };
+
+  // ── 장소 생성 모드 ──
+  const [isPlaceMode, setIsPlaceMode] = useState(false);
+  // ── 노드망 편집 (2026-10-19) ──
+  const [isNodeMode, setIsNodeMode] = useState(false);
+  const [nodeTool, setNodeTool] = useState<NodeTool>("select");
+  const [selectedNodeKey, setSelectedNodeKey] = useState<string | null>(null);
+  const [linkFromKey, setLinkFromKey] = useState<string | null>(null);
+  const [doorPair, setDoorPair] = useState<[string, string] | null>(null);
+  const [selectedEdge, setSelectedEdge] = useState<[string, string] | null>(null);
+  const [nodeRoute, setNodeRoute] = useState<{ keys: string[]; skipped: string[]; start: { x: number; y: number }; goal: { x: number; y: number } } | null>(null);
+  const draggingNode = useRef<string | null>(null);
+  // 끌어 옮긴 자리가 노드를 둘 수 없는 곳이면 되돌릴 원래 위치
+  const nodeDragFrom = useRef<{ key: string; x: number; y: number } | null>(null);
+  const [placeNodeAttach, setPlaceNodeAttach] = useState<NodeAttach | null>(null);
+  const [placeNodeChoice, setPlaceNodeChoice] = useState<NodeChoice>("auto");
+  const [showInitPoseTargetModal, setShowInitPoseTargetModal] = useState(false);
+  const [showInitPoseManualModal, setShowInitPoseManualModal] = useState(false);
+  // rviz식 위치 재조정(스캔 정합) 모달
+  const [showRelocalize, setShowRelocalize] = useState(false);
+
+  const [showGrid, setShowGrid] = useState(false);
+  const [showPlaceModal, setShowPlaceModal] = useState(false);
+  const [placeClickCoords, setPlaceClickCoords] = useState<{
+    worldX: number; worldY: number; pixelX: number; pixelY: number;
+  } | null>(null);
+  const [isFromRobotPos, setIsFromRobotPos] = useState(false);
+  const [isChargeCreate, setIsChargeCreate] = useState(false);
+  // 충전소 생성(A안) → 도킹 포인트 설정 단계 상태.
+  // 충전소 저장 후 세팅되면 도킹 포인트 안내 모달이 뜨고, 로봇을 도킹 포인트로
+  // 이동(충전 해제)시킨 뒤 그 위치 좌표로 "<충전소>-1" 도킹 포인트를 생성한다.
+  const [chargeDockSetup, setChargeDockSetup] = useState<{ chargeName: string } | null>(null);
+  const [dockSetupCharging, setDockSetupCharging] = useState<boolean | null>(null);
+
+  // ── 장소 수정 (등록과 동일한 MapPlaceCreateModal edit 모드 재사용) ──
+  const [editPlaceData, setEditPlaceData] = useState<PlaceEditData | null>(null);
+  const [modifiedDbIds, setModifiedDbIds] = useState<Set<number>>(new Set());
+
+  // ── 장소 삭제 모드 (훅으로 분리) ──
+  const {
+    isDeleteMode, setIsDeleteMode,
+    deletedDbIds, setDeletedDbIds,
+    deleteConfirmTarget, setDeleteConfirmTarget,
+    reset: resetDeleteMode,
+  } = usePlaceDelete();
+
+  // 등록 모달에 넘길 '이미 사용 중인 이름' — 이번 저장에서 지울 장소는 빼고, 미저장 장소는 넣는다.
+  const usedPlaceNames = useMemo(() => {
+    const names = takenPlaces.filter((p) => !deletedDbIds.has(p.id)).map((p) => p.name);
+    for (const p of pendingPlaces) names.push(p.LacationName);
+    return names;
+  }, [takenPlaces, deletedDbIds, pendingPlaces]);
+
+  // ── 경로 생성 모드 (way_info) — 훅으로 분리 ──
+  const {
+    isPathBuildMode, setIsPathBuildMode,
+    pathBuildOrder, setPathBuildOrder,
+    pathBuildWaits, setPathBuildWaits,
+    pathBuildName, setPathBuildName,
+    pathBuildWorkType, setPathBuildWorkType,
+    reset: resetPathBuild,
+  } = usePathBuilding();
+
+  // ── 구간 생성 모드 (훅으로 분리) ──
+  const {
+    isRouteMode, setIsRouteMode,
+    routeStartName, setRouteStartName,
+    routeEndName, setRouteEndName,
+    routeDirection, setRouteDirection,
+    pendingRoutes, setPendingRoutes,
+    dbRoutes, setDbRoutes,
+    deletedRouteDbIds, setDeletedRouteDbIds,
+    reset: resetRouteMode,
+  } = useRouteCreation();
+
+  // 같은 두 장소 사이에 이미 구간이 있는가(저장된 것·미저장 것 모두, 삭제 표시한 것은 제외).
+  // 같은 방향이거나, 반대 방향이라도 기존 것 또는 새 것이 양방향이면 겹친다.
+  const isDuplicateRoute = (start: string, end: string) => {
+    const existing = [
+      ...dbRoutes.filter((r) => !deletedRouteDbIds.has(r.id))
+        .map((r) => ({ s: r.StartPlaceName, e: r.EndPlaceName, d: r.Direction })),
+      ...pendingRoutes.map((r) => ({ s: r.startName, e: r.endName, d: r.direction })),
+    ];
+    return existing.some((r) =>
+      (r.s === start && r.e === end)
+      || (r.s === end && r.e === start && (r.d === "bidirectional" || routeDirection === "bidirectional"))
+    );
+  };
+
+  // 경로 빌드: 현재 마지막 장소에서 갈 수 있는 장소 이름 Set
+  const pathReachable = useMemo(() => {
+    if (!isPathBuildMode || pathBuildOrder.length === 0) return null;
+    const last = pathBuildOrder[pathBuildOrder.length - 1];
+    const allRoutes = [
+      ...dbRoutes.filter((r) => !deletedRouteDbIds.has(r.id)),
+      ...pendingRoutes.map((r) => ({ id: 0, MapId: 0, StartPlaceName: r.startName, EndPlaceName: r.endName, Direction: r.direction })),
+    ];
+    const names = new Set<string>();
+    for (const r of allRoutes) {
+      if (r.Direction === "forward" && r.StartPlaceName === last) names.add(r.EndPlaceName);
+      if (r.Direction === "reverse" && r.EndPlaceName === last) names.add(r.StartPlaceName);
+      if (r.Direction === "bidirectional") {
+        if (r.StartPlaceName === last) names.add(r.EndPlaceName);
+        if (r.EndPlaceName === last) names.add(r.StartPlaceName);
+      }
+    }
+    return names;
+  }, [isPathBuildMode, pathBuildOrder, dbRoutes, pendingRoutes, deletedRouteDbIds]);
+
+  // 경로 저장
+  const handleSavePath = async () => {
+    if (!pathBuildName.trim()) { modalAlert("경로명을 입력해주세요."); return; }
+    if (pathBuildOrder.length < 2) { modalAlert("장소를 2개 이상 선택해주세요."); return; }
+
+    // RobotName: 연결된 로봇 > 첫 번째 장소의 RobotName > 빈 문자열
+    const robotName =
+      connectedRobots[0]?.RobotName
+      ?? mapPlaces.find((p) => p.LacationName === pathBuildOrder[0])?.RobotName
+      ?? pendingPlaces.find((p) => p.LacationName === pathBuildOrder[0])?.RobotName
+      ?? "";
+
+    if (!robotName) { modalAlert("로봇 정보를 확인할 수 없습니다. 로봇을 연결하거나 장소에 로봇을 지정해주세요."); return; }
+
+    try {
+      const waits = pathBuildOrder.map((_, i) =>
+        Math.max(0, Math.floor(pathBuildWaits[i] ?? 0))
+      );
+      const hasWait = waits.some((w) => w > 0);
+      const res = await apiFetch(`/DB/path`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          RobotName: robotName,
+          TaskType: pathBuildWorkType,
+          WayName: pathBuildName.trim(),
+          WayPoints: pathBuildOrder.join(" - "),
+          WaitSeconds: hasWait ? JSON.stringify(waits) : null,
+        }),
+      });
+      if (!res.ok) throw new Error("경로 저장 실패");
+      modalAlert("경로가 저장되었습니다.");
+      setIsPathBuildMode(false);
+      setPathBuildOrder([]);
+      setPathBuildWaits([]);
+      setPathBuildName("");
+      setRightPanelOpen(true);
+    } catch (e) {
+      console.error(e);
+      modalAlert(e instanceof Error ? e.message : "저장 중 오류 발생");
+    }
+  };
+
+  // ── 경로 DB 로드 ──
+  const routesReqSeq = useRef(0);
+  const loadMapRoutes = useCallback(async (mapId: number) => {
+    const seq = ++routesReqSeq.current; // 장소와 같은 이유로 마지막 요청만 반영
+    try {
+      const res = await apiFetch(`/DB/routes?map_id=${mapId}`);
+      const data = await res.json();
+      if (seq !== routesReqSeq.current) return;
+      setDbRoutes(Array.isArray(data) ? data : []);
+    } catch (e) {
+      console.error("경로 로드 실패:", e);
+      setDbRoutes([]);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (selectedMap === "") {
+      setDbRoutes([]);
+      return;
+    }
+    loadMapRoutes(selectedMap as number);
+  }, [selectedMap, loadMapRoutes]);
+
+  // ── 장소 드래그 ──
+  const [draggingPlace, setDraggingPlace] = useState<{ key: string; name: string } | null>(null);
+  const [dragWorldPos, setDragWorldPos] = useState<{ x: number; y: number } | null>(null);
+  const [movedPlaces, setMovedPlaces] = useState<Map<string, { x: number; y: number }>>(new Map());
+  // 수정 모달에서 방향을 직접 바꾼 장소명. 드래그 시 방향 자동 재계산에서 제외한다.
+  const [yawPinnedPlaces, setYawPinnedPlaces] = useState<Set<string>>(new Set());
+  const dragStartMouse = useRef<{ x: number; y: number } | null>(null);
+  const dragPending = useRef<{ key: string; name: string; wx: number; wy: number; mx: number; my: number } | null>(null);
+  const dragTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // 모든 장소(DB+pending) name→좌표 맵 (드래그 오버라이드 포함)
+  const nav = useNavNodes(selectedMap);
+  // 경로 만들기 — 노드망 경로가 켜지면 구간 연결(pathReachable) 대신 노드망 기준으로 고를 수 있는 장소를 정한다
+  const buildReach = nav.enabled ? null : pathReachable;
+  const buildBlock = useMemo(() => toMoveBlock({ enabled: nav.enabled, check: nav.check ?? undefined }), [nav.enabled, nav.check]);
+  const buildBlockOf = useCallback((dbId: number | null | undefined) =>
+    buildBlock && dbId != null ? buildBlock.map ?? buildBlock.places[dbId] ?? null : null, [buildBlock]);
+  const navPlaces = useMemo(
+    () => mapPlaces.filter((p) => !deletedDbIds.has(p.id)).map((p) => ({ id: p.id, name: p.LacationName, x: p.LocationX, y: p.LocationY })),
+    [mapPlaces, deletedDbIds],
+  );
+
+  // 장소 생성 모달이 열리면 찍은 자리가 노드에 붙는지 확인한다
+  useEffect(() => {
+    if (!showPlaceModal || !placeClickCoords) { setPlaceNodeAttach(null); return; }
+    let cancelled = false;
+    setPlaceNodeAttach(null);
+    setPlaceNodeChoice("auto");
+    nav.checkAttach(placeClickCoords.worldX, placeClickCoords.worldY)
+      .then((r) => { if (!cancelled) setPlaceNodeAttach(r); })
+      .catch(() => { if (!cancelled) setPlaceNodeAttach(null); });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showPlaceModal, placeClickCoords]);
+
+  const handleNodeClick = (key: string) => {
+    if (nodeTool === "select") { setSelectedEdge(null); setSelectedNodeKey((k) => (k === key ? null : key)); return; }
+    if (nodeTool === "delete") {
+      // 지우기 전에 영향을 본다 — 충전소가 끊기면 막고, 다른 영향이 있으면 확인받고, 없으면 바로 지운다
+      const before = nav.check;
+      nav.checkRemove(key).then((res) => {
+        const after = res?.check ?? null;
+        const doRemove = () => { nav.removeNode(key, res?.block ?? []); if (selectedNodeKey === key) setSelectedNodeKey(null); };
+        if (!after || !before) { doRemove(); return; }
+        const had = new Set(before.issues.map((i) => i.text));
+        const added = after.issues.filter((i) => !had.has(i.text) && i.kind !== "isolated" && i.kind !== "manual_wall");
+        if (added.some((i) => i.level === "block" && i.kind === "required_unattached" && i.text.startsWith("충전소"))) {
+          modalAlert(`N${key} 노드는 지울 수 없습니다.
+충전소가 노드망에서 끊깁니다.
+노드를 옮기거나 다른 노드로 충전소를 먼저 이어 주세요.`);
+          return;
+        }
+        const lostIds = after.unlinkedPlaceIds.filter((id) => !before.unlinkedPlaceIds.includes(id));
+        const lost = navPlaces.filter((p) => lostIds.includes(p.id)).map((p) => p.name);
+        if (added.length === 0 && lost.length === 0) { doRemove(); return; }
+        const lines = [
+          `N${key} 노드를 삭제할까요?`,
+          ...added.map((i) => `· ${i.text}`),
+          ...(lost.length ? [`· 노드망에서 끊기는 장소: ${lost.join(", ")} — 이 장소로는 이동할 수 없게 됩니다.`] : []),
+        ];
+        modalConfirm(lines.join("\n"), doRemove);
+      });
+      return;
+    }
+    if (nodeTool === "link" || nodeTool === "door") {
+      if (!linkFromKey) { setLinkFromKey(key); return; }
+      if (linkFromKey === key) { setLinkFromKey(null); return; }
+      if (nodeTool === "link") {
+        const [a, b] = [linkFromKey, key];
+        void nav.checkLink(a, b).then((why) => {
+          if (why) { modalAlert(`${nodeLabel(a)}–${nodeLabel(b)}: ${why}`); return; }
+          nav.toggleLink(a, b);
+        });
+      }
+      else setDoorPair([linkFromKey, key]);
+      setLinkFromKey(null);
+    }
+  };
+
+  const placeCoordMap = useMemo(() => {
+    const map = new Map<string, { x: number; y: number }>();
+    for (const p of mapPlaces) {
+      if (!deletedDbIds.has(p.id)) {
+        const moved = movedPlaces.get(p.LacationName);
+        map.set(p.LacationName, moved ?? { x: p.LocationX, y: p.LocationY });
+      }
+    }
+    for (const p of pendingPlaces) {
+      const moved = movedPlaces.get(p.LacationName);
+      map.set(p.LacationName, moved ?? { x: p.LocationX, y: p.LocationY });
+    }
+    // 드래그 중인 장소는 실시간 좌표로 덮어쓰기
+    if (draggingPlace && dragWorldPos) {
+      map.set(draggingPlace.name, { x: dragWorldPos.x, y: dragWorldPos.y });
+    }
+    return map;
+  }, [mapPlaces, pendingPlaces, deletedDbIds, movedPlaces, draggingPlace, dragWorldPos]);
+
+  // ── ESC 키로 모드 취소 ──
+  useEffect(() => {
+    if (!isPlaceMode && !isDeleteMode && !isRouteMode && !isPathBuildMode) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setIsPlaceMode(false);
+        setIsDeleteMode(false);
+        setIsRouteMode(false);
+        setRouteStartName(null);
+        setRouteEndName(null);
+        setIsPathBuildMode(false);
+        setPathBuildOrder([]);
+        setPathBuildWaits([]);
+      }
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [isPlaceMode, isDeleteMode, isRouteMode, isPathBuildMode]);
+
+  // ── SVG 맵 뷰 상태 ──
+  const [processedImg, setProcessedImg] = useState<{ url: string; w: number; h: number; mask?: Uint8Array } | null>(null);
+
+  const { zoom, setZoom, rotation, setRotation, offset, setOffset, svgRef } =
+    useSvgPanZoom(processedImg !== null);
+
+  const nodeLayer = processedImg && mapMeta ? (
+                    <NodeLayer
+                      nodes={nav.nodes} edges={nav.edges} check={nav.check} places={navPlaces}
+                      meta={mapMeta} img={{ w: processedImg.w, h: processedImg.h }} zoom={zoom}
+                      active={isNodeMode} selectedKey={selectedNodeKey} linkFromKey={linkFromKey}
+                      showExcluded={isNodeMode && nodeTool === "link"}
+                      routeKeys={nodeRoute?.keys ?? []} routeSkipped={nodeRoute?.skipped ?? []}
+                      routeStart={nodeRoute?.start ?? null} routeGoal={nodeRoute?.goal ?? null}
+                      selectedEdge={selectedEdge}
+                      onEdgeClick={nodeTool === "select" ? (a, b) => { setSelectedNodeKey(null); setSelectedEdge([a, b]); } : undefined}
+                      onNodeClick={(key) => handleNodeClick(key)}
+                      onNodeMouseDown={(key, e) => {
+                        if (nodeTool !== "select") return;
+                        e.stopPropagation();
+                        draggingNode.current = key;
+                        const n0 = nav.nodes.find((n) => n.key === key);
+                        nodeDragFrom.current = n0 ? { key, x: n0.x, y: n0.y } : null;
+                        setSelectedNodeKey(key);
+                      }}
+                    />
+  ) : null;
+
+  const [isPanning, setIsPanning] = useState(false);
+  const panStart = useRef({ x: 0, y: 0 });
+
+  /** 맵을 SVG 컨테이너 중앙에 맞춤 (로드 시 & 초기화 버튼) */
+  const centerMapView = useCallback((img?: { w: number; h: number }) => {
+    const target = img ?? processedImg;
+    if (!target) return;
+    const svgEl = svgRef.current;
+    if (!svgEl || svgEl.getBoundingClientRect().width === 0) return;
+    const rect = svgEl.getBoundingClientRect();
+    const scaleX = rect.width / target.w;
+    const scaleY = rect.height / target.h;
+    const fitZoom = Math.min(scaleX, scaleY) * 0.75;
+    setZoom(fitZoom);
+    setRotation(0);
+    setOffset({ x: rect.width / 2, y: rect.height / 2 });
+  }, [processedImg, svgRef, setZoom, setRotation, setOffset]);
+
+  // ── 저장 모달 폼 ──
+  const [saveBizId, setSaveBizId] = useState<number | "">("");
+  const [saveFloorId, setSaveFloorId] = useState<number | "">("");
+  const [saveMapName, setSaveMapName] = useState("");
+  // 매핑 종료 응답의 새 맵 id — 성공 확인 뒤 상단 사업장·층·맵 기본값을 이 맵으로 맞춘다
+  const [savedMapId, setSavedMapId] = useState<number | null>(null);
+
+  // ── 맵핑 시작 모달 폼 ──
+  const [startBizId, setStartBizId] = useState<number | "">("");
+  const [startBizNew, setStartBizNew] = useState("");
+  const [startBizMode, setStartBizMode] = useState<"select" | "new">("select");
+  const [startFloorId, setStartFloorId] = useState<number | "">("");
+  const [startFloorNew, setStartFloorNew] = useState("");
+  const [startFloorMode, setStartFloorMode] = useState<"select" | "new">("select");
+  const [startFloors, setStartFloors] = useState<FloorItem[]>([]);
+  const [startMapName, setStartMapName] = useState("");
+  const [startMapNameChecked, setStartMapNameChecked] = useState<boolean | null>(null); // null=미확인, true=사용가능, false=중복
+  const [isMappingRunning, setIsMappingRunning] = useState(false); // 맵핑 진행 중 여부
+  const [isMappingStarting, setIsMappingStarting] = useState(false); // 맵핑 시작 준비 중
+  const [isMappingEnding, setIsMappingEnding] = useState(false); // 맵핑 종료(맵 생성) 중
+  const [isMappingCanceling, setIsMappingCanceling] = useState(false); // 맵핑 취소 처리 중
+
+  // ── 맵핑 실시간 시각화 (훅으로 분리) ──
+  const { mappingCanvasRef } = useMappingWebSocket(mappingState);
+
+  // ── 사업장 목록 로드 ──
+  const loadBusinesses = useCallback(async () => {
+    try {
+      const res = await apiFetch(`/map/businesses`);
+      const data = await res.json();
+      setBusinesses(Array.isArray(data) ? data : []);
+    } catch (e) {
+      console.error("사업장 로드 실패:", e);
+    }
+  }, []);
+
+  // ── 층 목록 로드 ──
+  const loadFloors = useCallback(async (bizId: number) => {
+    try {
+      const res = await apiFetch(`/map/floors?business_id=${bizId}`);
+      const data = await res.json();
+      setFloors(Array.isArray(data) ? data : []);
+    } catch (e) {
+      console.error("층 로드 실패:", e);
+    }
+  }, []);
+
+  // ── 영역(맵) 목록 로드 ──
+  const loadMaps = useCallback(async (floorId: number) => {
+    try {
+      const res = await apiFetch(`/map/maps?floor_id=${floorId}`);
+      const data = await res.json();
+      setMaps(data);
+    } catch (e) {
+      console.error("영역 로드 실패:", e);
+    }
+  }, []);
+
+  // ── 첫 번째 맵 자동 탐색 (초기 진입 / 탭 재진입 시 호출) ──
+  const loadFirstMap = useCallback(async () => {
+    try {
+      const bizRes = await apiFetch(`/map/businesses`);
+      const bizRaw = await bizRes.json();
+      const bizList: Business[] = Array.isArray(bizRaw) ? bizRaw : [];
+      setBusinesses(bizList);
+      if (bizList.length === 0) return;
+
+      for (const biz of bizList) {
+        const floorRes = await apiFetch(`/map/floors?business_id=${biz.id}`);
+        const floorRaw = await floorRes.json();
+        const floorList: FloorItem[] = Array.isArray(floorRaw) ? floorRaw : [];
+
+        for (const fl of floorList) {
+          const mapRes = await apiFetch(`/map/maps?floor_id=${fl.id}`);
+          const mapRaw = await mapRes.json();
+          const mapList: RobotMap[] = Array.isArray(mapRaw) ? mapRaw : [];
+
+          if (mapList.length > 0) {
+            setSelectedBiz(biz.id);
+            setFloors(floorList);
+            setSelectedFloor(fl.id);
+            setMaps(mapList);
+            setSelectedMap(mapList[0].id);
+            return;
+          }
+        }
+
+        if (floorList.length > 0) {
+          setSelectedBiz(biz.id);
+          setFloors(floorList);
+          setSelectedFloor(floorList[0].id);
+        }
+      }
+    } catch (e) {
+      console.error("초기 맵 로드 실패:", e);
+    } finally {
+      readyFlags.current.maps = true;
+      checkReady();
+    }
+  }, []);
+
+  // ── 초기 진입 시 호출 ──
+  useEffect(() => {
+    loadFirstMap();
+  }, [loadFirstMap]);
+
+  // ── 맵 편집 탭 재진입 시 필터 초기화 후 재로드 ──
+  const prevTabRef = useRef<MapTab>(activeTab);
+  useEffect(() => {
+    const wasNotMap = prevTabRef.current !== "map";
+    prevTabRef.current = activeTab;
+    if (wasNotMap && activeTab === "map") {
+      setSelectedBiz("");
+      setSelectedFloor("");
+      setSelectedMap("");
+      setFloors([]);
+      setMaps([]);
+      loadFirstMap();
+    }
+  }, [activeTab, loadFirstMap]);
+
+  useEffect(() => {
+    if (saveBizId !== "") {
+      loadFloors(saveBizId as number);
+    }
+  }, [saveBizId, loadFloors]);
+
+
+  // ── 맵 이미지 로드 & 회색 제거 ──
+  useEffect(() => {
+    if (selectedMap === "") {
+      setProcessedImg(null);
+      return;
+    }
+    const mapData = maps.find((m) => m.id === selectedMap);
+    if (!mapData) return;
+
+    const imgUrl = `${API_BASE}/${(mapData.ImgFilePath || mapData.PgmFilePath).replace("./", "")}`;
+    // 맵을 빠르게 바꾸면 이전 맵 이미지가 늦게 로드돼 새 맵 위를 덮었다. 바뀐 뒤의 onload 는 버린다.
+    let cancelled = false;
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.onload = () => {
+      if (cancelled) return;
+      const processed = processMapImage(img);
+      setProcessedImg(processed);
+
+      // SVG가 렌더된 후 중앙 배치 (마운트 대기)
+      const waitAndCenter = () => {
+        const svgEl = svgRef.current;
+        if (svgEl && svgEl.getBoundingClientRect().width > 0) {
+          centerMapView(processed);
+        } else {
+          requestAnimationFrame(waitAndCenter);
+        }
+      };
+      requestAnimationFrame(waitAndCenter);
+    };
+    img.src = imgUrl;
+    return () => { cancelled = true; };
+  }, [selectedMap, maps]);
+
+  // ── SVG 드래그 팬 ──
+  const panDragged = useRef(false);
+  const handleMouseDown = (e: React.MouseEvent) => {
+    if (draggingNode.current) return;
+    setIsPanning(true);
+    panDragged.current = false;
+    panStart.current = { x: e.clientX - offset.x, y: e.clientY - offset.y };
+  };
+  const handleMouseMove = (e: React.MouseEvent) => {
+    if (draggingNode.current) {
+      const c = svgEventToWorld(e);
+      if (c) nav.moveNode(draggingNode.current, c.worldX, c.worldY);
+      panDragged.current = true;
+      return;
+    }
+    // 드래그 대기 중 → 5px 이상 이동하면 드래그 시작
+    if (dragPending.current && !draggingPlace) {
+      const dp = dragPending.current;
+      const dist = Math.sqrt((e.clientX - dp.mx) ** 2 + (e.clientY - dp.my) ** 2);
+      if (dist >= 5) {
+        dragStartMouse.current = { x: dp.mx, y: dp.my };
+        setDraggingPlace({ key: dp.key, name: dp.name });
+        setDragWorldPos({ x: dp.wx, y: dp.wy });
+        dragPending.current = null;
+      }
+      return;
+    }
+    // 장소 드래그 처리
+    if (draggingPlace) {
+      const coords = svgEventToWorld(e);
+      if (coords) setDragWorldPos({ x: coords.worldX, y: coords.worldY });
+      return;
+    }
+    if (!isPanning) return;
+    // 5px 이상 이동해야 팬으로 인정 (클릭과 구분)
+    const dx = e.clientX - (panStart.current.x + offset.x);
+    const dy = e.clientY - (panStart.current.y + offset.y);
+    if (!panDragged.current && Math.sqrt(dx * dx + dy * dy) < 5) return;
+    panDragged.current = true;
+    setOffset({ x: e.clientX - panStart.current.x, y: e.clientY - panStart.current.y });
+  };
+  const handleMouseUp = () => {
+    draggingNode.current = null;
+    const from = nodeDragFrom.current;
+    nodeDragFrom.current = null;
+    const moved = from ? nav.nodes.find((n) => n.key === from.key) : undefined;
+    if (from && moved && (moved.x !== from.x || moved.y !== from.y)) {
+      void nav.checkSpot(moved.x, moved.y).then(async (why) => {
+        const reason = why ?? await nav.checkMove(from.key, moved.x, moved.y);
+        if (!reason) return;
+        nav.moveNode(from.key, from.x, from.y);
+        modalAlert(`여기로 옮길 수 없어 원래 자리로 되돌렸습니다 — ${reason}`);
+      });
+    }
+    // 드래그 대기 중이었으면 클리어 (클릭으로 끝남)
+    dragPending.current = null;
+
+    if (draggingPlace && dragWorldPos) {
+      const start = dragStartMouse.current;
+      const dist = start ? Math.sqrt(
+        (dragWorldPos.x - (movedPlaces.get(draggingPlace.name)?.x ?? 0)) ** 2 +
+        (dragWorldPos.y - (movedPlaces.get(draggingPlace.name)?.y ?? 0)) ** 2
+      ) : 999;
+      dragStartMouse.current = null;
+
+      // 실제 이동이 있었으면 위치 확정 + Yaw 자동 재계산
+      if (dist > 0.001) {
+        const placeName = draggingPlace.name;
+        // DB 장소면 수정 추적
+        if (draggingPlace.key.startsWith("db_")) {
+          setModifiedDbIds((prev) => new Set(prev).add(Number(draggingPlace.key.replace("db_", ""))));
+        }
+        setMovedPlaces((prev) => {
+          const next = new Map(prev);
+          next.set(placeName, { x: dragWorldPos.x, y: dragWorldPos.y });
+          return next;
+        });
+
+        // 경로 연결된 장소 → 다음 장소를 향하는 Yaw 자동 계산
+        autoRecalcYaw(placeName, { x: dragWorldPos.x, y: dragWorldPos.y });
+      }
+
+      setDraggingPlace(null);
+      setDragWorldPos(null);
+      return;
+    }
+    setIsPanning(false);
+  };
+
+  // ── 경로 연결된 장소의 Yaw 자동 재계산 ──
+  const autoRecalcYaw = (placeName: string, newCoord: { x: number; y: number }) => {
+    // 이 장소에서 출발하는 forward/bidirectional 경로 찾기
+    const allRoutes = [
+      ...dbRoutes.filter((r) => !deletedRouteDbIds.has(r.id)).map((r) => ({ start: r.StartPlaceName, end: r.EndPlaceName, dir: r.Direction })),
+      ...pendingRoutes.map((r) => ({ start: r.startName, end: r.endName, dir: r.direction })),
+    ];
+
+    // 출발 경로: forward/bidirectional에서 start가 이 장소
+    let targetName: string | null = null;
+    for (const r of allRoutes) {
+      if (r.start === placeName && (r.dir === "forward" || r.dir === "bidirectional")) {
+        targetName = r.end;
+        break;
+      }
+      if (r.end === placeName && (r.dir === "reverse" || r.dir === "bidirectional")) {
+        targetName = r.start;
+        break;
+      }
+    }
+
+    if (!targetName) return;
+    if (yawPinnedPlaces.has(placeName)) return;
+    const targetCoord = placeCoordMap.get(targetName);
+    if (!targetCoord) return;
+
+    const dx = targetCoord.x - newCoord.x;
+    const dy = targetCoord.y - newCoord.y;
+    const newYaw = Math.atan2(dy, dx); // 라디안
+
+    // DB 장소 Yaw 업데이트
+    const dbPlace = mapPlaces.find((p) => p.LacationName === placeName);
+    if (dbPlace) {
+      setMapPlaces((prev) => prev.map((p) =>
+        p.LacationName === placeName ? { ...p, Yaw: Number(newYaw.toFixed(4)) } : p
+      ));
+    }
+    // pending 장소 Yaw 업데이트
+    setPendingPlaces((prev) => prev.map((p) =>
+      p.LacationName === placeName ? { ...p, Yaw: Number(newYaw.toFixed(4)) } : p
+    ));
+  };
+
+  // ── SVG → 월드 좌표 변환 유틸 ──
+  const svgEventToWorld = (e: React.MouseEvent) => {
+    if (!processedImg || !mapMeta) return null;
+    const svgEl = svgRef.current;
+    if (!svgEl) return null;
+
+    const rect = svgEl.getBoundingClientRect();
+    const tx = (e.clientX - rect.left) - offset.x;
+    const ty = (e.clientY - rect.top) - offset.y;
+    const sx = tx / zoom;
+    const sy = ty / zoom;
+    const rad = (-rotation * Math.PI) / 180;
+    const rx = sx * Math.cos(rad) - sy * Math.sin(rad);
+    const ry = sx * Math.sin(rad) + sy * Math.cos(rad);
+    const imgPx = rx + processedImg.w / 2;
+    const imgPy = ry + processedImg.h / 2;
+    if (imgPx < 0 || imgPx > processedImg.w || imgPy < 0 || imgPy > processedImg.h) return null;
+    // 맵 바깥(투명) 영역 체크
+    if (processedImg.mask) {
+      const px = Math.floor(imgPx);
+      const py = Math.floor(imgPy);
+      if (px >= 0 && px < processedImg.w && py >= 0 && py < processedImg.h) {
+        if (processedImg.mask[py * processedImg.w + px] === 0) return null;
+      }
+    }
+    const worldX = imgPx * mapMeta.resolution + mapMeta.originX;
+    const worldY = (processedImg.h - imgPy) * mapMeta.resolution + mapMeta.originY;
+    return { worldX, worldY, pixelX: imgPx, pixelY: imgPy };
+  };
+
+  const handleSvgClick = (e: React.MouseEvent<SVGSVGElement>) => {
+    // 드래그 후 클릭 무시 (5px 이상 이동했으면 팬으로 간주)
+    if (panDragged.current) {
+      panDragged.current = false;
+      return;
+    }
+
+    // 노드 편집
+    if (isNodeMode) {
+      if (nodeTool === "add") {
+        const coords = svgEventToWorld(e);
+        if (!coords) { modalAlert("맵 범위를 벗어난 위치입니다."); return; }
+        const near = nav.nodes.some((n) => Math.hypot(n.x - coords.worldX, n.y - coords.worldY) < 0.4);
+        if (near) { modalAlert("다른 노드와 0.4m 안이라 놓지 않았습니다."); return; }
+        const { worldX, worldY } = coords;
+        void nav.checkSpot(worldX, worldY).then((why) => {
+          if (why) { modalAlert(`여기엔 노드를 둘 수 없습니다 — ${why}`); return; }
+          setSelectedNodeKey(nav.addNode(worldX, worldY));
+        });
+        return;
+      }
+      setLinkFromKey(null);
+      if (nodeTool === "select") setSelectedNodeKey(null);
+      return;
+    }
+
+    // 장소 생성 모드 (최우선)
+    if (isPlaceMode) {
+      const coords = svgEventToWorld(e);
+      if (!coords) { modalAlert("맵 범위를 벗어난 위치입니다."); return; }
+      setPlaceClickCoords(coords);
+      setShowPlaceModal(true);
+      setIsPlaceMode(false);
+      return;
+    }
+
+    // 구간 모드: 빈 공간 클릭 → 시작점 선택된 상태에서만 새 장소 생성
+    if (isRouteMode && routeStartName) {
+      const coords = svgEventToWorld(e);
+      if (!coords) { modalAlert("맵 범위를 벗어난 위치입니다."); return; }
+      setPlaceClickCoords(coords);
+      setShowPlaceModal(true);
+      return;
+    }
+  };
+
+  // ── 충전소 생성(A안) 도킹 포인트 단계: 로봇 충전 해제(언도킹) 여부 실시간 표시 ──
+  //    충전소 저장 후 모달이 떠 있는 동안 /robot/status 의 is_charging 을 폴링한다.
+  useEffect(() => {
+    if (!chargeDockSetup) { setDockSetupCharging(null); return; }
+    const rid = connectedRobots[0]?.id;
+    if (!rid) { setDockSetupCharging(null); return; }
+    let cancelled = false;
+    const check = async () => {
+      try {
+        const res = await apiFetch(`/robot/status`);
+        const list = await res.json();
+        const me = Array.isArray(list) ? list.find((s: { robot_id: number; is_charging?: boolean }) => s.robot_id === rid) : null;
+        if (!cancelled) setDockSetupCharging(me ? !!me.is_charging : null);
+      } catch {
+        /* 폴링 실패는 무시 — 상태 '확인 중'으로 표시 */
+      }
+    };
+    check();
+    const t = setInterval(check, 2000);
+    return () => { cancelled = true; clearInterval(t); };
+  }, [chargeDockSetup, connectedRobots]);
+
+  // 도킹 포인트(<충전소>-1) 생성: 로봇을 도킹 포인트로 보낸(충전 해제) 뒤 현재 좌표로 캡처.
+  const handleCreateDockPoint = () => {
+    if (!chargeDockSetup) return;
+    if (!robotPos) { modalAlert("로봇 위치 정보를 가져올 수 없습니다."); return; }
+    const dock: PendingPlace = {
+      tempId: `pending_dock_${Date.now()}`,
+      RobotName: connectedRobots[0]?.RobotName ?? "",
+      LacationName: `${chargeDockSetup.chargeName}-1`,
+      FloorId: selectedFloor !== "" ? (selectedFloor as number) : null,
+      LocationX: Number(robotPos.x.toFixed(3)),
+      LocationY: Number(robotPos.y.toFixed(3)),
+      Yaw: Number(robotPos.yaw.toFixed(4)),
+      MapId: selectedMap !== "" ? (selectedMap as number) : null,
+      Category: "waypoint",
+      Imformation: `${chargeDockSetup.chargeName} 충전 도킹 포인트`,
+    };
+    setPendingPlaces((prev) => [...prev, dock]);
+    setUndoStack((prev) => [...prev, { type: "addPlace", tempId: dock.tempId }]);
+    setChargeDockSetup(null);
+    modalAlert(`도킹 포인트 "${dock.LacationName}"가 추가되었습니다.\n상단 저장 버튼을 눌러 DB에 반영하세요.`);
+  };
+
+  // ── 상단 사업장 선택 ──
+  const handleBizChange = (bizId: number) => {
+    setSelectedBiz(bizId);
+    setSelectedFloor("");
+    setSelectedMap("");
+    setMaps([]);
+    // 사업장(→층) 변경 시 연결된 로봇 상태 전체 초기화
+    setConnectedRobots([]);
+    setSelectedConnectIds([]);
+    loadFloors(bizId);
+  };
+
+  // ── 상단 층 선택 ──
+  const handleFloorChange = async (floorId: number) => {
+    setSelectedFloor(floorId);
+    setSelectedMap("");
+    // 층 변경 시 이전 층에서 연결한 로봇 상태 전체 초기화
+    // (connectedRobots=[] → useRobotPolling이 robotPos/마커/폴링을 자동 정리)
+    setConnectedRobots([]);
+    setSelectedConnectIds([]);
+    try {
+      const res = await apiFetch(`/map/maps?floor_id=${floorId}`);
+      const data = await res.json();
+      const list: RobotMap[] = Array.isArray(data) ? data : [];
+      setMaps(list);
+      if (list.length > 0) {
+        const latest = list.reduce((a, b) => (b.id > a.id ? b : a));
+        setSelectedMap(latest.id);
+      }
+    } catch (e) {
+      console.error("영역 로드 실패:", e);
+    }
+  };
+
+  // ── 맵핑 시작 모달 열기 ──
+  const handleMappingStart = () => {
+    clearAllModes();
+    if (connectedRobots.length === 0) {
+      modalAlert("로봇이 연결되어 있지 않습니다. 먼저 로봇을 연결해주세요.");
+      return;
+    }
+    setStartBizId("");
+    setStartBizNew("");
+    setStartBizMode("select");
+    setStartFloorId("");
+    setStartFloorNew("");
+    setStartFloorMode("select");
+    setStartFloors([]);
+    setStartMapName("");
+    setStartMapNameChecked(null);
+    setMappingState("startModal");
+  };
+
+  const handlePathBuildStart = () => {
+    if (!processedImg || !mapMeta) { modalAlert("맵을 먼저 선택해주세요."); return; }
+    clearAllModes();
+    setIsPathBuildMode(true);
+    setPathBuildName("");
+    setRightPanelOpen(false);
+  };
+
+  const handleMapReset = () => {
+    clearAllModes();
+    if (!processedImg || !mapMeta) {
+      modalAlert("맵을 먼저 선택해주세요.");
+      return;
+    }
+    modalConfirm("맵 위의 모든 장소와 구간을 초기화하시겠습니까?\n저장 버튼을 눌러야 DB에 반영됩니다.", () => {
+      setUndoStack((prev) => [...prev, {
+        type: "mapReset" as const,
+        prevPendingPlaces: [...pendingPlaces],
+        prevPendingRoutes: [...pendingRoutes],
+        prevDeletedDbIds: new Set(deletedDbIds),
+        prevDeletedRouteDbIds: new Set(deletedRouteDbIds),
+        prevMovedPlaces: new Map(movedPlaces),
+        prevModifiedDbIds: new Set(modifiedDbIds),
+      }]);
+      setPendingPlaces([]);
+      setPendingRoutes([]);
+      setDeletedDbIds(new Set(mapPlaces.map((p) => p.id)));
+      setDeletedRouteDbIds(new Set(dbRoutes.map((r) => r.id)));
+      setMovedPlaces(new Map());
+      setModifiedDbIds(new Set());
+    });
+  };
+
+  // ── 시작 모달: 사업장 선택 시 층 로드 ──
+  const handleStartBizChange = async (bizId: number) => {
+    setStartBizId(bizId);
+    setStartFloorId("");
+    setStartFloorMode("select");
+    try {
+      const res = await apiFetch(`/map/floors?business_id=${bizId}`);
+      const data = await res.json();
+      setStartFloors(data);
+    } catch (e) {
+      setStartFloors([]);
+    }
+  };
+
+  // ── 영역 이름 중복 체크 ──
+  const handleCheckMapName = async () => {
+    const name = startMapName.trim();
+    if (!name) return;
+    try {
+      const res = await apiFetch(`/map/maps`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data: RobotMap[] = await res.json();
+      const exists = data.some((m) => m.MapName.trim() === name);
+      setStartMapNameChecked(!exists);
+    } catch (e) {
+      // 조회 실패를 조용히 넘기면 "확인 버튼이 왜 안 눌리는지" 알 수 없다.
+      console.error("중복 체크 실패:", e);
+      setStartMapNameChecked(null);
+      modalAlert("영역 이름을 확인하지 못했습니다. 잠시 후 다시 시도해주세요.");
+    }
+  };
+
+  // ── 맵핑 실제 시작 ──
+  const handleConfirmMappingStart = async () => {
+    if (startMapNameChecked !== true) {
+      modalAlert("영역 이름 중복 체크를 해주세요.");
+      return;
+    }
+    // 사업장·층은 필수 — 비어 있으면 잘못된 id 로 매핑이 시작된다.
+    if (startBizMode === "select" ? startBizId === "" : !startBizNew.trim()) {
+      modalAlert("사업장을 선택하거나 입력해주세요.");
+      return;
+    }
+    if (startFloorMode === "select" ? startFloorId === "" : !startFloorNew.trim()) {
+      modalAlert("층을 선택하거나 입력해주세요.");
+      return;
+    }
+
+    // 새 사업장 생성
+    let bizId = startBizId as number;
+    if (startBizMode === "new" && startBizNew.trim()) {
+      try {
+        const res = await apiFetch(`/map/businesses`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ BusinessName: startBizNew.trim() }),
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => null);
+          modalAlert(detailMessage(err) || "사업장 생성 실패");
+          return;
+        }
+        const biz = await res.json();
+        bizId = biz.id;
+        loadBusinesses();
+      } catch (e) {
+        modalAlert("사업장 생성 실패");
+        return;
+      }
+    }
+
+    // 새 층 생성
+    let floorId = startFloorId as number;
+    if (startFloorMode === "new" && startFloorNew.trim() && bizId) {
+      try {
+        const res = await apiFetch(`/map/floors`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ BusinessId: bizId, FloorName: startFloorNew.trim() }),
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => null);
+          modalAlert(detailMessage(err) || "층 생성 실패");
+          return;
+        }
+        const newFloor = await res.json();
+        floorId = newFloor.id;
+      } catch (e) {
+        modalAlert("층 생성 실패");
+        return;
+      }
+    }
+
+    if (!bizId || !floorId) {
+      modalAlert("사업장·층 정보를 확인해주세요.");
+      return;
+    }
+
+    // 맵핑 시작 정보 임시 저장 (종료 시 사용)
+    setSaveBizId(bizId);
+    setSaveFloorId(floorId);
+    setSaveMapName(startMapName.trim());
+    setIsMappingRunning(false);
+    setMappingState("mappingModal");
+  };
+
+  // ── 맵핑 시작 ──
+  const handleMappingRun = async () => {
+    if (isMappingStarting) return;
+    setIsMappingStarting(true);
+    try {
+      const res = await apiFetch(`/map/mapping/start`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          BusinessId: saveBizId,
+          FloorId: saveFloorId,
+          MapName: saveMapName,
+        }),
+      });
+      if (!res.ok) {
+        // 409(이미 진행 중)/422(입력 오류)/500(SSH 실패)을 구분해 원인을 보여준다.
+        const err = await res.json().catch(() => null);
+        modalAlert(detailMessage(err) || "맵핑을 시작하지 못했습니다.");
+        return;
+      }
+      setIsMappingRunning(true);
+    } catch (e) {
+      console.error("맵핑 시작 실패:", e);
+      modalAlert("네트워크 오류로 맵핑을 시작하지 못했습니다.");
+    } finally {
+      setIsMappingStarting(false);
+    }
+  };
+
+  // ── 맵핑 취소 ──
+  // 취소는 로봇의 맵 디렉토리를 삭제하는 되돌릴 수 없는 동작이므로 진행 중일 때는 확인을 받는다.
+  const runMappingCancel = async () => {
+    setIsMappingCanceling(true);
+    try {
+      const res = await apiFetch(`/map/mapping/cancel`, {
+        method: "POST",
+        timeoutMs: 120_000, // SSH 정리(stop → 삭제 → active 복원 → localization 재시작)
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => null);
+        modalAlert(detailMessage(err) || "맵핑 취소에 실패했습니다. 다시 시도해주세요.");
+        return; // 모달을 닫지 않고 재시도할 수 있게 둔다
+      }
+      const data = await res.json().catch(() => null);
+      if (data?.status === "warning" && data?.message) {
+        modalAlert(data.message); // 서버 상태는 풀렸지만 로봇 정리 실패
+      }
+      setIsMappingRunning(false);
+      setMappingState("idle");
+    } catch (e) {
+      console.error("맵핑 취소 실패:", e);
+      modalAlert("네트워크 오류로 맵핑을 취소하지 못했습니다. 다시 시도해주세요.");
+    } finally {
+      setIsMappingCanceling(false);
+    }
+  };
+
+  const handleMappingCancel = () => {
+    if (isMappingCanceling) return;
+    if (!isMappingRunning) {
+      // 아직 시작 전 — 로봇에 남긴 것이 없으므로 확인 없이 닫는다.
+      // (서버가 진행 중이라고 알고 있는 경우를 대비해 취소 요청은 그대로 보낸다. 미진행이면 서버가 무시한다.)
+      void runMappingCancel();
+      return;
+    }
+    modalConfirm(
+      "맵핑을 취소하면 지금까지 수집한 맵 데이터가 로봇에서 삭제되며 복구할 수 없습니다.\n취소하시겠습니까?",
+      () => void runMappingCancel()
+    );
+  };
+
+  // ── 맵핑 종료 → SSH 파일 가져오기 → DB 저장 → 성공 팝업 ──
+  // 종료 작업은 맵 디렉토리 대기(~60s) + zip(~120s) + SFTP + 변환 + DB 기록으로
+  // 기본 30초 타임아웃을 쉽게 초과한다. 타임아웃으로 abort되면 백엔드는 계속 저장 중인데
+  // 프론트는 실패로 오인해 경고창을 띄웠다(ERR-01). → 타임아웃을 충분히 늘려 실제 응답을
+  // 끝까지 기다리고, "타임아웃 abort"와 "진짜 백엔드 실패 응답"을 구분해 경고를 노출한다.
+  const handleMappingEnd = async () => {
+    if (isMappingEnding) return;
+    setIsMappingEnding(true);
+    try {
+      const res = await apiFetch(`/map/mapping/end`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        timeoutMs: 300_000, // 종료 작업은 길게 걸리므로 실제 응답을 끝까지 대기
+        body: JSON.stringify({
+          BusinessId: saveBizId,
+          FloorId: saveFloorId,
+          MapName: saveMapName,
+        }),
+      });
+      if (res.ok) {
+        const done = await res.json().catch(() => null);
+        setSavedMapId(typeof done?.map_id === "number" ? done.map_id : null);
+        setMappingState("success");
+      } else {
+        // 백엔드가 실제 실패 응답(4xx/5xx)을 준 경우에만 경고
+        const err = await res.json().catch(() => null);
+        modalAlert(detailMessage(err) || "맵 저장 실패");
+      }
+    } catch (e) {
+      // 타임아웃(TimeoutError/AbortError)은 실패로 단정하지 않는다.
+      // 백엔드는 저장을 계속 진행 중일 수 있으므로 안내만 하고, 맵 목록에서 확인하도록 한다.
+      const name = (e as Error)?.name;
+      if (name === "TimeoutError" || name === "AbortError") {
+        console.warn("맵핑 종료 응답 지연(타임아웃) — 백엔드 저장은 진행 중일 수 있음:", e);
+        modalAlert(
+          "맵 저장이 지연되고 있습니다. 잠시 후 맵 목록에서 생성 여부를 확인해주세요."
+        );
+      } else {
+        // 진짜 네트워크 오류만 오류로 경고
+        console.error("맵핑 종료 네트워크 오류:", e);
+        modalAlert("네트워크 오류로 맵핑 종료 요청에 실패했습니다.");
+      }
+    } finally {
+      setIsMappingEnding(false);
+    }
+  };
+
+  // ── 성공 팝업 확인 → 새 맵 자동 선택 ──
+  const handleSuccessConfirm = async () => {
+    setMappingState("idle");
+
+    // 사업장 목록 갱신
+    await loadBusinesses();
+
+    // 층 목록 갱신 & 선택
+    const bizId = saveBizId as number;
+    const floorId = saveFloorId as number;
+    setSelectedBiz(bizId);
+    await loadFloors(bizId);
+    setSelectedFloor(floorId);
+
+    // 영역(맵) 목록 갱신 & 새 맵 자동 선택 — 이름이 아니라 종료 응답의 id 로 고른다(이름은 옛 응답 대비 폴백)
+    const mapRes = await apiFetch(`/map/maps?floor_id=${floorId}`);
+    const mapRaw = await mapRes.json();
+    const mapList: RobotMap[] = Array.isArray(mapRaw) ? mapRaw : [];
+    setMaps(mapList);
+
+    const newMap =
+      mapList.find((m) => m.id === savedMapId) ?? mapList.find((m) => m.MapName === saveMapName);
+    if (newMap) {
+      setSelectedMap(newMap.id);
+    }
+    setSavedMapId(null);
+  };
+
+  // ── 맵 저장 ──
+  const handleSaveMap = async () => {
+    if (saveBizId === "" || saveFloorId === "" || !saveMapName.trim()) {
+      modalAlert("모든 항목을 입력해주세요.");
+      return;
+    }
+
+    try {
+      const res = await apiFetch(`/map/maps`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          BusinessId: saveBizId,
+          FloorId: saveFloorId,
+          MapName: saveMapName.trim(),
+        }),
+      });
+
+      if (res.ok) {
+        modalAlert(
+          "맵이 저장되었습니다.\n로봇을 해당 층으로 이동시켜 이 맵을 활성 맵으로 지정한 뒤, 충전소를 등록해 주세요. 충전소를 등록해야 전원 재기동 시 충전소 기준으로 위치가 자동 초기화됩니다."
+        );
+        setMappingState("idle");
+      } else {
+        modalAlert("저장 실패");
+      }
+    } catch (e) {
+      console.error("맵 저장 실패:", e);
+      modalAlert("저장 중 오류 발생");
+    }
+  };
+
+  // ── 로봇 위치 폴링 + 현재 층 갱신 (훅으로 분리) ──
+  // 통신이 끊긴(Offline) 로봇은 폴링이 연결 목록에서 자동 해제한다 → 운영자에게 안내.
+  const handleCommsLost = useCallback(
+    (robotNames: string[]) => {
+      modalAlert(
+        `다음 로봇과의 통신이 끊겨 연결이 해제되었습니다:\n${robotNames.join(", ")}`
+      );
+    },
+    [modalAlert]
+  );
+  useRobotPolling(connectedRobots, setConnectedRobots, setRobotPos, handleCommsLost);
+
+  // ── 매핑 중 새로고침/탭 닫기 안전장치 ──
+  // 매핑은 "시작"하면 로봇 NOS 의 active 맵이 새(미완결) 맵으로 바뀐다.
+  // 종료(/end) 없이 새로고침·탭닫기로 이탈하면 active 가 미완결 맵에 고착되므로,
+  // 페이지 unload 직전에 /map/mapping/cancel 을 sendBeacon 으로 호출해
+  // 백엔드가 이전 정상 맵으로 active 를 복원(초기화)하도록 한다.
+  // (쿠키 인증이라 sendBeacon 이 access_token 쿠키를 함께 전송 → 인증 통과)
+  useEffect(() => {
+    if (!isMappingRunning) return;
+    const cancelOnUnload = () => {
+      try {
+        navigator.sendBeacon(`${API_BASE}/map/mapping/cancel`);
+      } catch {
+        /* best-effort */
+      }
+    };
+    window.addEventListener("beforeunload", cancelOnUnload);
+    return () => window.removeEventListener("beforeunload", cancelOnUnload);
+  }, [isMappingRunning]);
+
+  // ── 저장 취소 ──
+  const handleCancelSave = () => {
+    setMappingState("idle");
+  };
+
+  // ── 로봇 연결 모달 ──
+  // 온라인 로봇 목록 로드 (모달 오픈 / 새로고침 공용)
+  // offline 로봇은 연결될 수 없으므로 목록에서 제외한다.
+  const loadRobotList = async () => {
+    setRobotListLoading(true);
+    try {
+      const [robotsRes, statusRes] = await Promise.all([
+        apiFetch(`/DB/robots`),
+        apiFetch(`/robot/status`),
+      ]);
+      const allRobots: Robot[] = await robotsRes.json();
+      const statuses: { robot_id: number; network: string }[] = await statusRes.json();
+      const onlineIds = new Set(
+        statuses.filter((s) => s.network === "Online").map((s) => s.robot_id)
+      );
+      const list = allRobots.filter((r) => onlineIds.has(r.id)); // 오프라인 제외
+      // 다른 층에 있는 로봇도 고를 수 있어야 연결 뒤 그 층으로 맞춰 줄 수 있다 — 거르지 않고 현재 맵 로봇을 앞에 둔다
+      list.sort((a, b) => Number(b.CurrentMapId === selectedMap) - Number(a.CurrentMapId === selectedMap));
+      setRobots(list);
+    } catch (e) {
+      console.error("로봇 목록 로드 실패:", e);
+      setRobots([]);
+    } finally {
+      setRobotListLoading(false);
+    }
+  };
+
+  const handleOpenRobotModal = async () => {
+    clearAllModes();
+    await loadRobotList();
+    // 체크박스 선택은 연결 상태와 분리된 "일괄 선택" 용도이므로 빈 상태로 시작
+    setSelectedConnectIds([]);
+    setShowRobotModal(true);
+  };
+
+  // 모달 내 "새로고침" — 열려 있는 동안 offline된 로봇을 실시간 반영
+  const handleRefreshRobotList = () => loadRobotList();
+
+  // ── 동기화 모달 열기 ──
+  const handleOpenImportModal = async () => {
+    clearAllModes();
+    if (selectedBiz === "") {
+      modalAlert("사업장을 먼저 선택해주세요.");
+      return;
+    }
+    try {
+      // 온라인 상태(network === "Online")인 실제 로봇만 가져오기 대상으로 노출.
+      // (test123(127.0.0.1)·IP 미설정 등 더미/오프라인 로봇은 NOS 맵을 가질 수 없음)
+      const [robotsRes, statusRes] = await Promise.all([
+        apiFetch(`/DB/robots`),
+        apiFetch(`/robot/status`),
+      ]);
+      const allRobots: Robot[] = await robotsRes.json();
+      const statuses: { robot_name: string; network: string }[] = await statusRes.json();
+      const onlineNames = new Set(
+        statuses.filter((s) => s.network === "Online").map((s) => s.robot_name)
+      );
+      setImportRobots(allRobots.filter((r) => onlineNames.has(r.RobotName)));
+    } catch (e) {
+      console.error("로봇 목록 로드 실패:", e);
+      setImportRobots([]);
+    }
+    setShowImportModal(true);
+  };
+
+  const handleOpenInitPoseModal = () => {
+    clearAllModes();
+    if (connectedRobots.length === 0) {
+      modalAlert("위치 재조정할 로봇을 먼저 연결해주세요.");
+      return;
+    }
+    if (selectedMap === "") {
+      modalAlert("위치 재조정할 맵을 먼저 선택해주세요.");
+      return;
+    }
+    if (connectedRobots.length === 1) {
+      setSelectedInitPoseRobot(connectedRobots[0]);
+      setShowRelocalize(true);
+      return;
+    }
+    setShowInitPoseTargetModal(true);
+  };
+
+  const handleSelectInitPoseRobot = (robot: Robot) => {
+    setSelectedInitPoseRobot(robot);
+    setShowInitPoseTargetModal(false);
+    setShowRelocalize(true);
+  };
+
+  const handleInitPoseResolved = async () => {
+    setShowInitPoseManualModal(false);
+    try {
+      const target = selectedInitPoseRobot?.id
+        ? `/robot/position?robot_id=${selectedInitPoseRobot.id}`
+        : "/robot/position";
+      const res = await apiFetch(target);
+      if (res.ok) {
+        const data = await res.json();
+        if (typeof data?.x === "number" && typeof data?.y === "number") {
+          setRobotPos({ x: data.x, y: data.y, yaw: Number(data.yaw ?? 0) });
+        }
+      }
+    } catch (e) {
+      console.warn("위치 재조정 후 로봇 위치 재조회 실패:", e);
+    }
+    modalAlert("로봇 위치를 갱신했습니다.");
+  };
+
+  const handleImported = async ({ map_id, floor_id, map_name }: { map_id: number; floor_id: number; map_name: string }) => {
+    setShowImportModal(false);
+    modalAlert(`"${map_name}" 맵을 가져왔습니다.`);
+    // 가져온 맵이 현재 보고 있는 층이면 목록 새로고침 + 선택
+    if (floor_id === selectedFloor) {
+      await loadMaps(floor_id);
+      setSelectedMap(map_id);
+    }
+  };
+
+  const handleOpenSyncModal = async () => {
+    clearAllModes();
+    if (selectedMap === "") {
+      modalAlert("동기화할 맵을 먼저 선택해주세요.");
+      return;
+    }
+    try {
+      const res = await apiFetch(`/DB/robots`);
+      const data = await res.json();
+      setSyncRobots(data);
+    } catch (e) {
+      console.error("로봇 목록 로드 실패:", e);
+    }
+    setSelectedSyncIds([]);
+    setShowSyncModal(true);
+  };
+
+  const handleSyncConfirm = async () => {
+    const mapData = maps.find((m) => m.id === selectedMap);
+    if (!mapData) return;
+    const selected = syncRobots.filter((r) => selectedSyncIds.includes(r.id));
+    if (selected.length === 0) { modalAlert("동기화할 로봇을 선택해주세요."); return; }
+
+    const names = selected.map((r) => r.RobotName).join(", ");
+    modalConfirm(`로봇 [${names}]에 맵 '${mapData.MapName}'을(를) 동기화하시겠습니까?`, async () => {
+      setShowSyncModal(false);
+
+      const initial: RobotSyncState[] = selected.map((robot) => ({
+        robot,
+        status: "waiting",
+        step: 0,
+        msg: "",
+        retryCount: 0,
+      }));
+      setSyncProgressStates(initial);
+      setShowSyncProgressModal(true);
+
+      const updateRobot = (robotId: number, patch: Partial<RobotSyncState>) => {
+        setSyncProgressStates((prev) =>
+          prev.map((s) => (s.robot.id === robotId ? { ...s, ...patch } : s))
+        );
+      };
+
+      const results: string[] = [];
+      for (const robot of selected) {
+        updateRobot(robot.id, { status: "in-progress", step: 1, msg: "맵 파일 전송 중", retryCount: 0 });
+
+        try {
+          const res = await fetch(`${API_BASE}/map/maps/sync`, {
+            method: "POST",
+            credentials: "include",
+            headers: {
+              "Content-Type": "application/json",
+              "X-Requested-With": "XMLHttpRequest",
+            },
+            body: JSON.stringify({ map_id: mapData.id, robot_id: robot.id }),
+          });
+
+          if (!res.ok || !res.body) {
+            let detail = `HTTP ${res.status}`;
+            try {
+              const err = await res.json();
+              detail = err.detail || detail;
+            } catch {}
+            updateRobot(robot.id, { status: "failed", errorMsg: detail });
+            results.push(`${robot.RobotName} — 동기화 실패 (${detail})`);
+            continue;
+          }
+
+          const reader = res.body.getReader();
+          const decoder = new TextDecoder("utf-8");
+          let buffer = "";
+          let finalMsg = "";
+          let finalStatus: "ok" | "error" | null = null;
+
+          while (true) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+
+            let nlIdx = buffer.indexOf("\n");
+            while (nlIdx >= 0) {
+              const line = buffer.slice(0, nlIdx).trim();
+              buffer = buffer.slice(nlIdx + 1);
+              if (line) {
+                try {
+                  const evt = JSON.parse(line);
+                  if (evt.event === "retry") {
+                    updateRobot(robot.id, {
+                      retryCount: (evt.attempt ?? 1) - 1,
+                      step: 1,
+                      msg: "맵 파일 전송 중",
+                    });
+                  } else if (evt.event === "step") {
+                    updateRobot(robot.id, { step: evt.step, msg: evt.msg });
+                  } else if (evt.event === "done") {
+                    finalStatus = evt.status;
+                    finalMsg = evt.msg || "";
+                  }
+                } catch (e) {
+                  console.warn("[sync] 이벤트 파싱 실패:", line, e);
+                }
+              }
+              nlIdx = buffer.indexOf("\n");
+            }
+          }
+
+          if (finalStatus === "ok") {
+            updateRobot(robot.id, { status: "success" });
+            results.push(`${robot.RobotName} — 동기화 완료`);
+          } else {
+            const reason = finalMsg || "알 수 없는 오류";
+            updateRobot(robot.id, { status: "failed", errorMsg: reason });
+            results.push(`${robot.RobotName} — 동기화 실패 (${reason})`);
+          }
+        } catch (e: any) {
+          updateRobot(robot.id, { status: "failed", errorMsg: e.message });
+          results.push(`${robot.RobotName} — 동기화 실패 (${e.message})`);
+        }
+      }
+
+      setShowSyncProgressModal(false);
+      modalAlert(results.join("\n"));
+    });
+  };
+
+  const [connectChecking, setConnectChecking] = useState(false);
+
+  // 대상 로봇들을 /robot/status 기준 online/offline으로 분류 (연결·해제 공용)
+  const partitionByOnline = async (targets: Robot[]) => {
+    const res = await apiFetch(`/robot/status`);
+    if (!res.ok) throw new Error();
+    const statuses: { robot_id: number; network: string }[] = await res.json();
+    const online: Robot[] = [];
+    const offline: string[] = [];
+    for (const r of targets) {
+      const st = statuses.find((s) => s.robot_id === r.id);
+      if (st && st.network === "Online") online.push(r);
+      else offline.push(r.RobotName);
+    }
+    return { online, offline };
+  };
+
+  // 연결한 로봇이 있는 층·맵으로 상단 선택을 맞춘다.
+  // 로봇의 현재 층·맵을 모르면 지금 층에 그대로 있고, 그 층의 활성 맵(로봇이 쓰는 맵, 없으면 최근 맵)을 고른다.
+  // 사업장·층 변경 핸들러(handleBizChange/handleFloorChange)는 연결을 끊으므로 여기서는 상태를 직접 맞춘다.
+  const focusConnectedRobotMap = async (robot: Robot) => {
+    try {
+      const mapId = robot.CurrentMapId ?? null;
+      const floorId = robot.CurrentFloorId ?? null;
+      if (mapId !== null && floorId !== null) {
+        if (mapId === selectedMap) return;
+        const [floorRes, mapRes] = await Promise.all([
+          apiFetch(`/map/floors`),
+          apiFetch(`/map/maps?floor_id=${floorId}`),
+        ]);
+        const floorRaw = await floorRes.json();
+        const mapRaw = await mapRes.json();
+        const allFloors: FloorItem[] = Array.isArray(floorRaw) ? floorRaw : [];
+        const mapList: RobotMap[] = Array.isArray(mapRaw) ? mapRaw : [];
+        const floor = allFloors.find((f) => f.id === floorId);
+        if (!floor || !mapList.some((m) => m.id === mapId)) return; // 볼 수 없는 층·맵이면 그대로 둔다
+        confirmDiscardThen(() => {
+          setSelectedBiz(floor.BusinessId);
+          setFloors(allFloors.filter((f) => f.BusinessId === floor.BusinessId));
+          setSelectedFloor(floorId);
+          setMaps(mapList);
+          setSelectedMap(mapId);
+        });
+        return;
+      }
+      if (selectedFloor === "" || maps.length === 0) return;
+      const robotsRes = await apiFetch(`/DB/robots`);
+      const robotsRaw = await robotsRes.json();
+      const all: Robot[] = Array.isArray(robotsRaw) ? robotsRaw : [];
+      const inUse = all.find(
+        (r) => r.CurrentFloorId === selectedFloor && maps.some((m) => m.id === r.CurrentMapId)
+      )?.CurrentMapId;
+      const active = inUse ?? maps.reduce((a, b) => (b.id > a.id ? b : a)).id;
+      if (active !== selectedMap) confirmDiscardThen(() => setSelectedMap(active));
+    } catch (e) {
+      console.warn("연결 로봇 층·맵 맞춤 실패:", e);
+    }
+  };
+
+  // 연결은 가산(merge): 이미 연결된 로봇은 제외하고 online인 로봇만 추가한다.
+  const connectRobots = async (targets: Robot[]) => {
+    const fresh = targets.filter((t) => !connectedRobots.some((c) => c.id === t.id));
+    if (fresh.length === 0) return;
+    setConnectChecking(true);
+    try {
+      const { online, offline } = await partitionByOnline(fresh);
+      if (offline.length > 0) {
+        modalAlert(`다음 로봇이 응답하지 않습니다:\n${offline.join(", ")}\n\n온라인 상태의 로봇만 연결됩니다.`);
+      }
+      if (online.length === 0) {
+        modalAlert("연결 가능한 로봇이 없습니다.");
+        return;
+      }
+      setConnectedRobots((prev) => {
+        const has = new Set(prev.map((r) => r.id));
+        return [...prev, ...online.filter((r) => !has.has(r.id))];
+      });
+      // 처음 연결할 때만 맞춘다 — 이미 다른 로봇이 연결돼 있으면 보고 있는 맵을 바꾸지 않는다
+      if (connectedRobots.length === 0) await focusConnectedRobotMap(online[0]);
+    } catch {
+      modalAlert("로봇 상태 확인에 실패했습니다.");
+    } finally {
+      setConnectChecking(false);
+    }
+  };
+
+  // 연결해제도 연결과 동일하게 online 상태에서만 가능하다.
+  // offline 로봇은 해제하지 않고 안내만 한다.
+  const disconnectRobots = async (targets: Robot[]) => {
+    if (targets.length === 0) return;
+    setConnectChecking(true);
+    try {
+      const { online, offline } = await partitionByOnline(targets);
+      if (offline.length > 0) {
+        modalAlert(`다음 로봇이 응답하지 않아 해제할 수 없습니다:\n${offline.join(", ")}\n\n온라인 상태의 로봇만 해제됩니다.`);
+      }
+      if (online.length === 0) return; // 해제 가능한 로봇 없음
+      const removeIds = new Set(online.map((r) => r.id));
+      setConnectedRobots((prev) => prev.filter((r) => !removeIds.has(r.id)));
+    } catch {
+      modalAlert("로봇 상태 확인에 실패했습니다.");
+    } finally {
+      setConnectChecking(false);
+    }
+  };
+
+  // 모달이 넘기는 id 배열을 Robot으로 매핑해 실행 (카드/선택/전체 공용 진입점)
+  const handleConnectIds = (ids: number[]) =>
+    connectRobots(robots.filter((r) => ids.includes(r.id)));
+  const handleDisconnectIds = (ids: number[]) =>
+    disconnectRobots(connectedRobots.filter((r) => ids.includes(r.id)));
+
+  // ── 맵 삭제 ──
+  const handleDeleteMap = async () => {
+    clearAllModes();
+    if (selectedMap === "") {
+      modalAlert("삭제할 맵을 먼저 선택해주세요.");
+      return;
+    }
+    const mapName = maps.find((m) => m.id === selectedMap)?.MapName ?? "선택된 맵";
+    modalConfirm(`"${mapName}" 맵을 삭제하시겠습니까?\n맵에 포함된 장소, 구간, 관련 경로가 모두 삭제됩니다.`, async () => {
+      try {
+        const res = await apiFetch(`/map/maps/${selectedMap}`, { method: "DELETE" });
+        if (!res.ok) throw new Error("맵 삭제 실패");
+        modalAlert("맵이 삭제되었습니다.");
+        setPendingPlaces([]);
+        setPendingRoutes([]);
+        setDeletedDbIds(new Set());
+        setDeletedRouteDbIds(new Set());
+        setMovedPlaces(new Map());
+        setModifiedDbIds(new Set());
+        setUndoStack([]);
+        if (selectedFloor !== "") {
+          const fl = floors.find((a) => a.id === selectedFloor);
+          if (fl) {
+            const mapsRes = await apiFetch(`/map/maps?floor_id=${fl.id}`);
+            if (mapsRes.ok) {
+              const updatedMaps = await mapsRes.json();
+              setMaps(updatedMaps);
+              if (updatedMaps.length > 0) {
+                setSelectedMap(updatedMaps[0].id);
+              } else {
+                setSelectedMap("");
+                setMapPlaces([]);
+                setDbRoutes([]);
+                setProcessedImg(null);
+              }
+            }
+          }
+        } else {
+          setSelectedMap("");
+          setMapPlaces([]);
+          setDbRoutes([]);
+          setProcessedImg(null);
+        }
+      } catch (e) {
+        modalAlert(e instanceof Error ? e.message : "삭제 중 오류 발생");
+      }
+    });
+  };
+
+  return (
+    <PermissionGuard requiredPermissions={["map-edit", "place-list", "path-list"]}>
+    <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+      {/* 페이지 헤더 + 탭 */}
+      <div className="page-header-tab">
+        <h1>맵 관리</h1>
+        <div className={styles.mapTab}>
+          {mapTabs.map((tab) => (
+            <div
+              key={tab.id}
+              className={activeTab === tab.id ? styles.mapTabActive : ""}
+              onClick={() => {
+                if (tab.id === activeTab) return;
+                const goTab = () => {
+                  clearAllModes();
+                  setRightPanelOpen(true);
+                  setActiveTab(tab.id);
+                };
+                // 맵 편집을 벗어나면 미저장 편집은 되살릴 수 없다(재진입 시 맵/필터가 초기화됨).
+                if (activeTab === "map" && hasUnsavedMapEdits()) {
+                  modalConfirm(
+                    "저장하지 않은 장소·구간 변경사항이 있습니다.\n탭을 이동하면 사라집니다. 이동하시겠습니까?",
+                    () => { discardMapEdits(); goTab(); }
+                  );
+                  return;
+                }
+                goTab();
+              }}
+            >
+              {tab.label}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {activeTab === "place" && mapTabs.some((t) => t.id === "place") && <PlaceList robots={tabRobots} floors={tabFloors} />}
+      {activeTab === "path" && mapTabs.some((t) => t.id === "path") && <PathList robots={tabRobots} floors={tabFloors} />}
+      {activeTab === "facility" && mapTabs.some((t) => t.id === "facility") && <FacilityTab robots={tabRobots} floors={tabFloors} businesses={businesses} />}
+
+      {activeTab === "map" && mapTabs.some((t) => t.id === "map") && <div className={styles.container}>
+        {/* ── 상단바(제목 + 컨트롤) ── */}
+        <MapToolbar
+          title={mapTabs.find((t) => t.id === "map")?.label ?? "맵 편집"}
+          businesses={businesses}
+          floors={floors}
+          maps={maps}
+          selectedBiz={selectedBiz}
+          selectedFloor={selectedFloor}
+          selectedMap={selectedMap}
+          connectedRobots={connectedRobots}
+          onBizChange={(bizId) => confirmDiscardThen(() => handleBizChange(bizId))}
+          onFloorChange={(floorId) => confirmDiscardThen(() => handleFloorChange(floorId))}
+          onMapChange={(mapId) => {
+            if (mapId === selectedMap) return;
+            confirmDiscardThen(() => setSelectedMap(mapId));
+          }}
+          onClearModes={clearAllModes}
+          onSaveAll={handleSaveAll}
+          savingAll={isSavingAll}
+          onOpenSyncModal={handleOpenSyncModal}
+          onOpenImportModal={handleOpenImportModal}
+          onDeleteMap={handleDeleteMap}
+          onOpenRobotModal={handleOpenRobotModal}
+          onOpenInitPoseModal={handleOpenInitPoseModal}
+        />
+
+        {/* ── 메인 영역 ── */}
+        <div className={styles.mainArea}>
+          {/* 맵 캔버스 (전체 배경) */}
+          <div className={styles.mapCanvas}>
+            {processedImg ? (
+              <svg
+                ref={svgRef}
+                className={styles.mapSvg}
+                style={draggingPlace ? { cursor: "grabbing" } : isPlaceMode ? { cursor: "crosshair" } : (isDeleteMode || isRouteMode || isPathBuildMode) ? { cursor: "pointer" } : undefined}
+                onMouseDown={handleMouseDown}
+                onMouseMove={handleMouseMove}
+                onMouseUp={handleMouseUp}
+                onMouseLeave={handleMouseUp}
+                onClick={handleSvgClick}
+              >
+                <g transform={`translate(${offset.x}, ${offset.y}) scale(${zoom}) rotate(${rotation})`}>
+                  <image
+                    href={processedImg.url}
+                    x={-processedImg.w / 2}
+                    y={-processedImg.h / 2}
+                    width={processedImg.w}
+                    height={processedImg.h}
+                  />
+                  {/* 격자 오버레이 (1m 간격) */}
+                  {showGrid && mapMeta && (() => {
+                    const cellPx = 1 / mapMeta.resolution; // 1미터 = N 픽셀
+                    const x0 = -processedImg.w / 2;
+                    const y0 = -processedImg.h / 2;
+                    const lines: React.ReactNode[] = [];
+                    for (let x = 0; x <= processedImg.w; x += cellPx) {
+                      lines.push(<line key={`gv${x}`} x1={x0 + x} y1={y0} x2={x0 + x} y2={y0 + processedImg.h} stroke="rgba(0,255,180,0.15)" strokeWidth={0.5} />);
+                    }
+                    for (let y = 0; y <= processedImg.h; y += cellPx) {
+                      lines.push(<line key={`gh${y}`} x1={x0} y1={y0 + y} x2={x0 + processedImg.w} y2={y0 + y} stroke="rgba(0,255,180,0.15)" strokeWidth={0.5} />);
+                    }
+                    return <g pointerEvents="none">{lines}</g>;
+                  })()}
+                  {/* 구간 선 — 노드망 경로가 켜지면(노드망이 구간을 대신한다) 그리지 않는다 */}
+                  {!nav.enabled && mapMeta && (() => {
+                    const allRoutes = [
+                      ...dbRoutes
+                        .filter((r) => !deletedRouteDbIds.has(r.id))
+                        .map((r) => ({ key: `rdb_${r.id}`, dbId: r.id, tempId: null as string | null, start: r.StartPlaceName, end: r.EndPlaceName, dir: r.Direction, pending: false })),
+                      ...pendingRoutes.map((r) => ({ key: r.tempId, dbId: null as number | null, tempId: r.tempId, start: r.startName, end: r.endName, dir: r.direction, pending: true })),
+                    ];
+                    return allRoutes.map((route) => {
+                      const startCoord = placeCoordMap.get(route.start);
+                      const endCoord = placeCoordMap.get(route.end);
+                      if (!startCoord || !endCoord) return null;
+
+                      const x1 = (startCoord.x - mapMeta.originX) / mapMeta.resolution - processedImg.w / 2;
+                      const y1 = processedImg.h - (startCoord.y - mapMeta.originY) / mapMeta.resolution - processedImg.h / 2;
+                      const x2 = (endCoord.x - mapMeta.originX) / mapMeta.resolution - processedImg.w / 2;
+                      const y2 = processedImg.h - (endCoord.y - mapMeta.originY) / mapMeta.resolution - processedImg.h / 2;
+
+                      const dx = x2 - x1;
+                      const dy = y2 - y1;
+                      const len = Math.sqrt(dx * dx + dy * dy);
+                      if (len < 1) return null;
+                      const ux = dx / len;
+                      const uy = dy / len;
+                      // 시작/끝을 마커에서 살짝 띄움
+                      const margin = 12 / zoom;
+                      const sx = x1 + ux * margin;
+                      const sy = y1 + uy * margin;
+                      const ex = x2 - ux * margin;
+                      const ey = y2 - uy * margin;
+
+                      const color = route.pending ? "#FFD700" : "#4CAF50";
+                      const arrowSize = 6 / zoom;
+
+                      // 화살촉 계산
+                      const fwdArrow = `M${ex},${ey} L${ex - ux * arrowSize + uy * arrowSize * 0.5},${ey - uy * arrowSize - ux * arrowSize * 0.5} L${ex - ux * arrowSize - uy * arrowSize * 0.5},${ey - uy * arrowSize + ux * arrowSize * 0.5} Z`;
+                      const revArrow = `M${sx},${sy} L${sx + ux * arrowSize - uy * arrowSize * 0.5},${sy + uy * arrowSize + ux * arrowSize * 0.5} L${sx + ux * arrowSize + uy * arrowSize * 0.5},${sy + uy * arrowSize - ux * arrowSize * 0.5} Z`;
+
+                      return (
+                        <g key={route.key}>
+                          {/* 클릭 영역 (투명 두꺼운 선) */}
+                          {isDeleteMode && (
+                            <line
+                              x1={sx} y1={sy} x2={ex} y2={ey}
+                              stroke="transparent" strokeWidth={12 / zoom}
+                              style={{ cursor: "pointer" }}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setDeleteConfirmTarget({
+                                  type: route.dbId != null ? "route_db" : "route_pending",
+                                  id: route.dbId ?? route.tempId!,
+                                  name: `${route.start} → ${route.end}`,
+                                });
+                              }}
+                            />
+                          )}
+                          <line
+                            x1={sx} y1={sy} x2={ex} y2={ey}
+                            stroke={color} strokeWidth={2 / zoom}
+                            strokeDasharray={route.pending ? `${4 / zoom} ${3 / zoom}` : "none"}
+                            opacity={0.9}
+                            pointerEvents="none"
+                          />
+                          {/* 정방향 / 양방향: 끝 화살촉 */}
+                          {(route.dir === "forward" || route.dir === "bidirectional") && (
+                            <path d={fwdArrow} fill={color} pointerEvents="none" />
+                          )}
+                          {/* 역방향 / 양방향: 시작 화살촉 */}
+                          {(route.dir === "reverse" || route.dir === "bidirectional") && (
+                            <path d={revArrow} fill={color} pointerEvents="none" />
+                          )}
+                        </g>
+                      );
+                    });
+                  })()}
+
+                  {/* 노드망 (2026-10-19) — 편집 중이 아니면 장소 마커 아래에 흐리게 */}
+                  {!isNodeMode && nodeLayer}
+
+                  {/* 경로 빌드 라인 시각화 */}
+                  {isPathBuildMode && mapMeta && pathBuildOrder.length >= 2 && (() => {
+                    const segments: React.ReactNode[] = [];
+                    for (let i = 0; i < pathBuildOrder.length - 1; i++) {
+                      const startCoord = placeCoordMap.get(pathBuildOrder[i]);
+                      const endCoord = placeCoordMap.get(pathBuildOrder[i + 1]);
+                      if (!startCoord || !endCoord) continue;
+                      const x1 = (startCoord.x - mapMeta.originX) / mapMeta.resolution - processedImg.w / 2;
+                      const y1 = processedImg.h - (startCoord.y - mapMeta.originY) / mapMeta.resolution - processedImg.h / 2;
+                      const x2 = (endCoord.x - mapMeta.originX) / mapMeta.resolution - processedImg.w / 2;
+                      const y2 = processedImg.h - (endCoord.y - mapMeta.originY) / mapMeta.resolution - processedImg.h / 2;
+                      const mx = (x1 + x2) / 2;
+                      const my = (y1 + y2) / 2;
+                      segments.push(
+                        <g key={`pathbuild_${i}`}>
+                          <line x1={x1} y1={y1} x2={x2} y2={y2}
+                            stroke="#FF6B35" strokeWidth={3 / zoom} opacity={0.85} pointerEvents="none" />
+                          <g transform={`translate(${mx}, ${my}) scale(${1 / zoom})`}>
+                            <circle r="9" fill="#FF6B35" />
+                            <text textAnchor="middle" dominantBaseline="central" fill="#fff" fontSize="10" fontWeight="700">
+                              {i + 1}
+                            </text>
+                          </g>
+                        </g>
+                      );
+                    }
+                    return segments;
+                  })()}
+
+                  {/* 저장된 장소 + 미저장 장소 마커 표시 */}
+                  {mapMeta && [
+                    ...mapPlaces
+                      .filter((p) => !deletedDbIds.has(p.id))
+                      .map((p) => ({ key: `db_${p.id}`, dbId: p.id, tempId: null as string | null, name: p.LacationName, x: p.LocationX, y: p.LocationY, pending: false, category: p.Category as string | undefined })),
+                    ...pendingPlaces
+                      .map((p) => ({ key: p.tempId, dbId: null as number | null, tempId: p.tempId, name: p.LacationName, x: p.LocationX, y: p.LocationY, pending: true, category: p.Category as string | undefined })),
+                  ].map((place) => {
+                    // 드래그 중이면 드래그 좌표, 아니면 movedPlaces 또는 원본
+                    const isDragging = draggingPlace?.name === place.name && dragWorldPos;
+                    const moved = movedPlaces.get(place.name);
+                    const wx = isDragging ? dragWorldPos!.x : moved ? moved.x : place.x;
+                    const wy = isDragging ? dragWorldPos!.y : moved ? moved.y : place.y;
+                    const px = (wx - mapMeta.originX) / mapMeta.resolution;
+                    const py = processedImg.h - (wy - mapMeta.originY) / mapMeta.resolution;
+                    const svgX = px - processedImg.w / 2;
+                    const svgY = py - processedImg.h / 2;
+                    return (
+                      <g
+                        key={place.key}
+                        transform={`translate(${svgX}, ${svgY})`}
+                        style={{ cursor: (isDeleteMode || isRouteMode || isPathBuildMode) ? "pointer" : draggingPlace?.name === place.name ? "grabbing" : "grab" }}
+                        onMouseDown={(!isDeleteMode && !isRouteMode && !isPlaceMode && !isPathBuildMode) ? (e) => {
+                          e.stopPropagation();
+                          dragPending.current = { key: place.key, name: place.name, wx, wy, mx: e.clientX, my: e.clientY };
+                          if (dragTimer.current) clearTimeout(dragTimer.current);
+                          dragTimer.current = null;
+                        } : undefined}
+                        onDoubleClick={(!isDeleteMode && !isRouteMode && !isPlaceMode && !isPathBuildMode) ? (e) => {
+                          e.stopPropagation();
+                          // 드래그 취소
+                          dragPending.current = null;
+                          if (draggingPlace) {
+                            setDraggingPlace(null);
+                            setDragWorldPos(null);
+                          }
+                          const dbP = place.dbId != null ? mapPlaces.find((p) => p.id === place.dbId) : null;
+                          const pendP = place.tempId ? pendingPlaces.find((p) => p.tempId === place.tempId) : null;
+                          const yaw = dbP?.Yaw ?? pendP?.Yaw ?? 0;
+                          const desc = dbP?.Imformation ?? pendP?.Imformation ?? "";
+                          const floorName = floors.find((f) => f.id === (dbP?.FloorId ?? pendP?.FloorId))?.FloorName ?? "";
+                          setEditPlaceData({
+                            key: place.key,
+                            name: place.name,
+                            robotName: dbP?.RobotName ?? pendP?.RobotName ?? connectedRobots[0]?.RobotName ?? "",
+                            floor: floorName,
+                            x: wx,
+                            y: wy,
+                            yaw,
+                            desc,
+                            mapId: dbP?.MapId ?? pendP?.MapId ?? (selectedMap !== "" ? (selectedMap as number) : null),
+                            category: dbP?.Category ?? pendP?.Category ?? "waypoint",
+                          });
+                        } : undefined}
+                        onClick={(isDeleteMode || isRouteMode || isPathBuildMode) ? (e) => {
+                          e.stopPropagation();
+                          if (isPathBuildMode) {
+                            // 경로 빌드: 장소 추가 — 노드망으로 갈 수 없는 장소는 넣지 못한다
+                            const blocked = buildBlockOf(place.dbId);
+                            if (blocked) {
+                              modalAlert(`'${place.name}'은(는) 노드망으로 갈 수 없어 경로에 넣을 수 없습니다.
+${blocked}`);
+                              return;
+                            }
+                            if (pathBuildOrder.length === 0 || (buildReach && buildReach.has(place.name)) || !buildReach) {
+                              const last = pathBuildOrder[pathBuildOrder.length - 1];
+                              if (last === place.name) return; // 연속 동일 장소 방지
+                              setPathBuildOrder((prev) => [...prev, place.name]);
+                              setPathBuildWaits((prev) => [...prev, 0]);
+                            }
+                            return;
+                          }
+                          if (isDeleteMode) {
+                            setDeleteConfirmTarget({
+                              type: place.dbId != null ? "db" : "pending",
+                              id: place.dbId ?? place.tempId!,
+                              name: place.name,
+                            });
+                          } else if (isRouteMode) {
+                            if (!routeStartName) {
+                              setRouteStartName(place.name);
+                            } else if (!routeEndName && place.name !== routeStartName) {
+                              setRouteEndName(place.name);
+                            }
+                          }
+                        } : undefined}
+                      >
+                        <g transform={`scale(${1 / zoom})`}>
+                          {/* 구간 모드 시작점 하이라이트 */}
+                          {isRouteMode && routeStartName === place.name && (
+                            <circle r="14" fill="none" stroke="#4CAF50" strokeWidth="2.5" strokeDasharray="4 2" />
+                          )}
+                          {/* 구간 모드 끝점 하이라이트 */}
+                          {isRouteMode && routeEndName === place.name && (
+                            <circle r="14" fill="none" stroke="#FF9800" strokeWidth="2.5" strokeDasharray="4 2" />
+                          )}
+                          {/* 경로 빌드: 갈 수 있는 장소 하이라이트 */}
+                          {isPathBuildMode && buildReach && buildReach.has(place.name) && (
+                            <circle r="14" fill="none" stroke="#FF6B35" strokeWidth="2" strokeDasharray="4 2" opacity={0.8} />
+                          )}
+                          {/* 경로 빌드: 현재 마지막 선택 장소 */}
+                          {isPathBuildMode && pathBuildOrder.length > 0 && pathBuildOrder[pathBuildOrder.length - 1] === place.name && (
+                            <circle r="14" fill="none" stroke="#FF6B35" strokeWidth="2.5" />
+                          )}
+                          {/* 드래그 중 하이라이트 */}
+                          {draggingPlace?.name === place.name && (
+                            <circle r="16" fill="rgba(0,176,238,0.15)" stroke="#00B0EE" strokeWidth="2" />
+                          )}
+                          {(() => {
+                            const isModified = place.pending || (place.dbId != null && modifiedDbIds.has(place.dbId)) || movedPlaces.has(place.name);
+                            const isUnreachable = (isPathBuildMode && !!buildBlockOf(place.dbId))
+                              || (isPathBuildMode && pathBuildOrder.length > 0 && buildReach && !buildReach.has(place.name) && pathBuildOrder[pathBuildOrder.length - 1] !== place.name);
+                            // 대시보드(POIOverlay)와 동일한 카테고리 아이콘·색 + 중앙 앵커(좌표=아이콘 중앙).
+                            const { icon: Icon, color } = getCategoryStyle(place.category);
+                            return (<>
+                          <Icon
+                            x={-10}
+                            y={-10}
+                            width={20}
+                            height={20}
+                            fill={color}
+                            color="#fff"
+                            strokeWidth={1.5}
+                            opacity={isUnreachable ? 0.25 : isModified ? 0.7 : 1}
+                            style={{ filter: "drop-shadow(0 1px 1.5px rgba(0,0,0,0.55))" }}
+                          />
+                          <text
+                            y={-14}
+                            textAnchor="middle"
+                            fill={isModified ? "#FFD700" : "#fff"}
+                            fontSize="11"
+                            fontWeight="600"
+                            paintOrder="stroke"
+                            stroke="rgba(0,0,0,0.7)"
+                            strokeWidth="3"
+                          >
+                            {place.name}
+                          </text>
+                          </>); })()}
+                        </g>
+                      </g>
+                    );
+                  })}
+
+                  {/* 노드 편집 중에는 노드를 장소 마커 위에 그린다(클릭·끌기) */}
+                  {isNodeMode && nodeLayer}
+
+                  {/* 로봇 위치 표시 (RobotMarker 스타일) — 현재 층과 같을 때만 */}
+                  {robotPos && mapMeta && connectedRobots.some((r) => r.CurrentFloorId === selectedFloor) && (() => {
+                    const px = (robotPos.x - mapMeta.originX) / mapMeta.resolution;
+                    const py = processedImg.h - (robotPos.y - mapMeta.originY) / mapMeta.resolution;
+                    const svgX = px - processedImg.w / 2;
+                    const svgY = py - processedImg.h / 2;
+                    return (
+                      <g transform={`translate(${svgX}, ${svgY})`}>
+                        {/* 화살표 촉이 로봇 전방(yaw)을 향하도록: Y미러 보정(-yaw). +180° 보정은 ERR-05 오진 과보정이라 원복 */}
+                        <g transform={`rotate(${-(robotPos.yaw * 180) / Math.PI})`}>
+                          <g transform={`scale(${1 / zoom})`}>
+                            <polygon
+                              points="-10,-8 10,0 -10,8 -6,0"
+                              fill={ROBOT_MARKER_FILL}
+                              stroke={ROBOT_MARKER_STROKE}
+                              strokeWidth="1"
+                            />
+                          </g>
+                        </g>
+                      </g>
+                    );
+                  })()}
+
+                </g>
+              </svg>
+            ) : selectedMap === "" ? (
+              <div className={styles.mapPlaceholderEmpty}>
+                <span>등록된 지도가 없습니다</span>
+              </div>
+            ) : (
+              <div className={styles.mapPlaceholderLoading}>
+                <div className={styles.mapPlaceholderSpinner} />
+                <span>지도를 불러오는 중...</span>
+              </div>
+            )}
+
+          {/* 장소 생성/삭제 모드 배너 */}
+          {isPlaceMode && (
+            <div className={styles.placeBanner}>
+              지도를 클릭하여 장소 좌표를 선택하세요
+            </div>
+          )}
+
+          {showInitPoseTargetModal && (
+            <div className={styles.startOverlay} onClick={() => setShowInitPoseTargetModal(false)}>
+              <div className={styles.robotModal} onClick={(e) => e.stopPropagation()}>
+                <div className={styles.startHeader}>
+                  <div className={styles.startHeaderLeft}>
+                    <img src="/icon/robot_w.png" alt="" />
+                    <h2>위치 재조정 로봇 선택</h2>
+                  </div>
+                  <button
+                    className={styles.startCloseBtn}
+                    onClick={() => setShowInitPoseTargetModal(false)}
+                  >
+                    &times;
+                  </button>
+                </div>
+
+                <div className={styles.robotBody}>
+                  <div className={styles.robotActionBar}>
+                    <div className={styles.robotActionBarInfo}>
+                      <span className={styles.robotConnectedDot} />
+                      <span className={styles.robotConnCount}>
+                        {connectedRobots.length}대 연결
+                      </span>
+                      <span
+                        className={styles.robotConnNames}
+                        title={connectedRobots.map((r) => r.RobotName).join(", ")}
+                      >
+                        재조정할 로봇 1대를 선택하세요
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className={styles.startSection}>
+                    <div className={styles.startSectionTitle}>
+                      <span>연결된 로봇</span>
+                      <div className={styles.startSectionLine} />
+                    </div>
+
+                    <div className={styles.robotList}>
+                      {connectedRobots.map((robot) => (
+                        <button
+                          key={robot.id}
+                          type="button"
+                          className={styles.robotItem}
+                          onClick={() => handleSelectInitPoseRobot(robot)}
+                        >
+                          <div className={styles.robotItemLeft}>
+                            <img
+                              src="/icon/robot_icon(1).png"
+                              alt=""
+                              className={styles.robotItemIcon}
+                            />
+                            <div>
+                              <div className={styles.robotItemName}>
+                                {robot.RobotName}
+                                <span className={styles.robotConnectedInline}>
+                                  <span className={styles.robotConnectedDot} />
+                                  연결됨
+                                </span>
+                              </div>
+                              <div className={styles.robotItemInfo}>
+                                {robot.ModelName && <span>{robot.ModelName}</span>}
+                                {robot.SerialNumber && <span>SN: {robot.SerialNumber}</span>}
+                              </div>
+                            </div>
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
+                <div className={styles.startFooter}>
+                  <button
+                    className={styles.startFooterBtn + " " + styles.startBtnCancel}
+                    onClick={() => setShowInitPoseTargetModal(false)}
+                  >
+                    닫기
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          <InitPoseConfirmModal
+            open={showInitPoseManualModal}
+            robotId={selectedInitPoseRobot?.id}
+            robotName={selectedInitPoseRobot?.RobotName}
+            detectedAt={new Date().toISOString()}
+            onResolved={handleInitPoseResolved}
+            onClose={() => setShowInitPoseManualModal(false)}
+            zIndex={10000}
+          />
+
+          <RelocalizeModal
+            open={showRelocalize}
+            mapConfig={relocalizeMapConfig}
+            robotId={selectedInitPoseRobot?.id}
+            robotName={selectedInitPoseRobot?.RobotName}
+            onClose={() => setShowRelocalize(false)}
+            onConfirmed={handleInitPoseResolved}
+          />
+          {isDeleteMode && (
+            <div className={styles.placeBanner} style={{ background: "rgba(183, 28, 28, 0.8)" }}>
+              삭제할 장소 또는 구간을 클릭하세요
+            </div>
+          )}
+          {isPathBuildMode && (
+            <div className={styles.placeBanner} style={{ background: "rgba(255, 107, 53, 0.85)" }}>
+              {pathBuildOrder.length === 0
+                ? "시작 장소를 클릭하세요"
+                : `${pathBuildOrder[pathBuildOrder.length - 1]}에서 다음 장소를 클릭하세요`}
+            </div>
+          )}
+          {isRouteMode && (
+            <>
+              <div className={styles.placeBanner} style={{ background: "rgba(56, 142, 60, 0.85)" }}>
+                {!routeStartName
+                  ? "시작 장소를 클릭하세요"
+                  : !routeEndName
+                    ? `"${routeStartName}"에서 연결할 장소를 클릭하세요`
+                    : `${routeStartName} → ${routeEndName}`}
+              </div>
+              {/* 방향 선택기 + 확인 버튼 */}
+              {routeStartName && (
+                <div
+                  style={{
+                    position: "absolute", top: 50, left: "50%", transform: "translateX(-50%)",
+                    zIndex: 21, display: "flex", gap: 4, alignItems: "center",
+                    background: "var(--surface-3)", borderRadius: 8, padding: "4px 6px",
+                    border: "1px solid rgba(255,255,255,0.1)", boxShadow: "0 4px 12px rgba(0,0,0,0.3)",
+                  }}
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  {([
+                    { value: "forward" as RouteDirection, label: "정방향 →" },
+                    { value: "reverse" as RouteDirection, label: "역방향 ←" },
+                    { value: "bidirectional" as RouteDirection, label: "양방향 ↔" },
+                  ]).map((opt) => (
+                    <button
+                      key={opt.value}
+                      onClick={(e) => { e.stopPropagation(); setRouteDirection(opt.value); }}
+                      style={{
+                        padding: "5px 12px", borderRadius: 6, border: "1px solid",
+                        borderColor: routeDirection === opt.value ? "var(--color-info-border)" : "transparent",
+                        background: routeDirection === opt.value ? "var(--color-info-bg)" : "transparent",
+                        color: "var(--text-primary)", fontSize: "var(--font-size-sm)",
+                        cursor: "pointer", fontWeight: routeDirection === opt.value ? 600 : 400,
+                      }}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                  {/* 확인 버튼 — 시작+끝점 모두 선택됐을 때 */}
+                  {routeEndName && (
+                    <>
+                      <div style={{ width: 1, height: 22, background: "rgba(255,255,255,0.15)", margin: "0 4px" }} />
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (isDuplicateRoute(routeStartName!, routeEndName)) {
+                            modalAlert(
+                              `"${routeStartName} → ${routeEndName}" 구간이 이미 있습니다.\n` +
+                              "방향을 바꾸려면 기존 구간을 삭제한 뒤 다시 만들어 주세요."
+                            );
+                            return;
+                          }
+                          const routeTempId = `route_${Date.now()}`;
+                          setPendingRoutes((prev) => [...prev, {
+                            tempId: routeTempId,
+                            startName: routeStartName,
+                            endName: routeEndName,
+                            direction: routeDirection,
+                          }]);
+                          setUndoStack((prev) => [...prev, { type: "addRoute", tempId: routeTempId }]);
+                          // 구간 생성 완료 → 모드 종료
+                          setIsRouteMode(false);
+                          setRouteStartName(null);
+                          setRouteEndName(null);
+                        }}
+                        style={{
+                          padding: "5px 16px", borderRadius: 6,
+                          border: "1px solid var(--color-info-border)",
+                          background: "var(--color-info-bg)",
+                          color: "var(--text-primary)", fontSize: "var(--font-size-sm)",
+                          cursor: "pointer", fontWeight: 600,
+                        }}
+                      >
+                        확인
+                      </button>
+                    </>
+                  )}
+                </div>
+              )}
+            </>
+          )}
+          </div>
+
+          {/* 격자 버튼 (좌측 상단 모서리) */}
+          <button
+            className={styles.gridBtn}
+            onClick={() => setShowGrid((v) => !v)}
+            style={showGrid ? { background: "var(--surface-5)", color: "var(--color-info)" } : undefined}
+            title={showGrid ? "격자 숨기기" : "격자 표시"}
+          >
+            <span>&#9638;</span>
+          </button>
+
+          {/* 상단 가로 도구바 (오버레이) */}
+          <div className={styles.topTools}>
+            <button
+              className={styles.topToolBtn}
+              onClick={handleUndo}
+              disabled={undoStack.length === 0}
+              style={undoStack.length === 0 ? { opacity: 0.4, cursor: "default" } : undefined}
+            >
+              <span className={styles.topToolIcon}>&#8634;</span>
+              <span>되돌리기</span>
+            </button>
+            <button
+              className={styles.topToolBtn}
+              onClick={() => {
+                clearAllModes();
+                if (!processedImg || !mapMeta) {
+                  modalAlert("맵을 먼저 선택해주세요.");
+                  return;
+                }
+                if (!robotPos) {
+                  modalAlert("로봇 위치 정보를 가져올 수 없습니다.");
+                  return;
+                }
+                // A안: 충전소 = 로봇이 실제 충전 중인 '현재 위치' 그대로 캡처.
+                // (기존 0.866m 정면 오프셋 추정 제거 — 실제 충전 위치와 어긋나는 원인이었음)
+                // 도킹 포인트는 충전소 저장 후 로봇을 도킹 포인트로 보낸 뒤 별도 캡처한다.
+                const chargePx = (robotPos.x - mapMeta.originX) / mapMeta.resolution;
+                const chargePy = processedImg.h - (robotPos.y - mapMeta.originY) / mapMeta.resolution;
+                setPlaceClickCoords({
+                  worldX: Number(robotPos.x.toFixed(3)),
+                  worldY: Number(robotPos.y.toFixed(3)),
+                  pixelX: chargePx,
+                  pixelY: chargePy,
+                });
+                setIsFromRobotPos(true);
+                setIsChargeCreate(true);
+                setShowPlaceModal(true);
+              }}
+            >
+              <span className={styles.topToolIcon}>&#9733;</span>
+              <span>충전소 생성</span>
+            </button>
+            <button
+              className={styles.topToolBtn}
+              onClick={() => {
+                clearAllModes();
+                if (!processedImg || !mapMeta) {
+                  modalAlert("맵을 먼저 선택해주세요.");
+                  return;
+                }
+                if (!robotPos) {
+                  modalAlert("로봇 위치 정보를 가져올 수 없습니다.");
+                  return;
+                }
+                const px = (robotPos.x - mapMeta.originX) / mapMeta.resolution;
+                const py = processedImg.h - (robotPos.y - mapMeta.originY) / mapMeta.resolution;
+                setPlaceClickCoords({
+                  worldX: robotPos.x,
+                  worldY: robotPos.y,
+                  pixelX: px,
+                  pixelY: py,
+                });
+                setIsFromRobotPos(true);
+                setShowPlaceModal(true);
+              }}
+            >
+              <span className={styles.topToolIcon}>&#9673;</span>
+              <span>현 위치에서 장소 생성</span>
+            </button>
+          </div>
+
+          {/* 좌측 세로 도구 (오버레이) */}
+          <div className={styles.leftTools}>
+            {/* 구간 — 노드망 경로가 켜지기 전까지만(S7 에서 구간 코드와 함께 정리) */}
+            {!nav.enabled && (
+              <button
+                className={`${styles.toolBtn} ${isRouteMode ? styles.toolBtnActive : ""}`}
+                onClick={() => {
+                  if (!processedImg || !mapMeta) {
+                    modalAlert("맵을 먼저 선택해주세요.");
+                    return;
+                  }
+                  setIsRouteMode((v) => !v);
+                  setIsNodeMode(false);
+                  setIsPlaceMode(false);
+                  setIsDeleteMode(false);
+                  setRouteStartName(null);
+                  setRouteEndName(null);
+                }}
+              >
+                <img src="/icon/path_way.png" alt="구간" className={styles.toolBtnImg} />
+                <span>구간</span>
+              </button>
+            )}
+            <button
+              className={`${styles.toolBtn} ${isPlaceMode ? styles.toolBtnActive : ""}`}
+              onClick={() => {
+                if (!processedImg || !mapMeta) {
+                  modalAlert("맵을 먼저 선택해주세요.");
+                  return;
+                }
+                setIsPlaceMode((v) => !v);
+                setIsDeleteMode(false);
+                setIsRouteMode(false);
+                setRouteStartName(null);
+                setRouteEndName(null);
+              }}
+            >
+              <img src="/icon/place_point.png" alt="장소" className={styles.toolBtnImg} />
+              <span>장소</span>
+            </button>
+            <button
+              className={`${styles.toolBtn} ${isNodeMode ? styles.toolBtnActive : ""}`}
+              onClick={() => {
+                if (!processedImg || !mapMeta) {
+                  modalAlert("맵을 먼저 선택해주세요.");
+                  return;
+                }
+                const next = !isNodeMode;
+                clearAllModes();
+                setIsNodeMode(next);
+              }}
+            >
+              <Waypoints className={styles.toolBtnImg} strokeWidth={2} aria-hidden="true" />
+              <span>노드</span>
+            </button>
+            <button
+              className={`${styles.toolBtn} ${isDeleteMode ? styles.toolBtnActive : ""}`}
+              onClick={() => {
+                if (!processedImg || !mapMeta) {
+                  modalAlert("맵을 먼저 선택해주세요.");
+                  return;
+                }
+                setIsDeleteMode((v) => !v);
+                setIsPlaceMode(false);
+                setIsRouteMode(false);
+                setRouteStartName(null);
+                setRouteEndName(null);
+              }}
+            >
+              <span className={styles.toolBtnIcon}>&#10005;</span>
+              <span>삭제</span>
+            </button>
+          </div>
+
+          {/* 좌측 하단 줌/회전 컨트롤 (오버레이) */}
+          <div className={styles.zoomControls}>
+            <button className={styles.zoomBtn} onClick={() => setZoom((z) => Math.min(10, z * 1.2))}>
+              <span>+</span><span className={styles.zoomLabel}>확대</span>
+            </button>
+            <button className={styles.zoomBtn} onClick={() => setZoom((z) => Math.max(0.1, z * 0.8))}>
+              <span>-</span><span className={styles.zoomLabel}>축소</span>
+            </button>
+            <button className={styles.zoomBtn} onClick={() => setRotation((r) => r + 90)}>
+              <span>&#8635;</span><span className={styles.zoomLabel}>회전</span>
+            </button>
+            <button className={styles.zoomBtn} onClick={() => setRotation((r) => r - 90)}>
+              <span>&#8634;</span><span className={styles.zoomLabel}>반회전</span>
+            </button>
+            <button className={`${styles.zoomBtn} ${styles.zoomBtnReset}`} onClick={() => centerMapView()}>
+              <span>&#9673;</span><span className={styles.zoomLabel}>초기화</span>
+            </button>
+          </div>
+
+          {/* 오른쪽 패널 (오버레이) */}
+          <MapRightPanel
+            open={rightPanelOpen}
+            onToggle={() => setRightPanelOpen((v) => !v)}
+            onPathBuildStart={handlePathBuildStart}
+            onMappingStart={handleMappingStart}
+            onMapReset={handleMapReset}
+            robotConnected={connectedRobots.length > 0}
+          />
+
+          <NodeEditPanel
+            isOpen={isNodeMode}
+            mapId={selectedMap}
+            businessId={maps.find((m) => m.id === selectedMap)?.BusinessId ?? (selectedBiz === "" ? null : selectedBiz)}
+            tool={nodeTool}
+            setTool={(t) => { setNodeTool(t); setLinkFromKey(null); setDoorPair(null); setSelectedEdge(null); }}
+            nodes={nav.nodes} edges={nav.edges} check={nav.check} error={nav.error}
+            dirty={nav.dirty} saving={nav.saving}
+            selectedKey={selectedNodeKey} linkFromKey={linkFromKey} doorPair={doorPair}
+            selectedEdge={selectedEdge} chargerNodes={nav.chargerNodes} migration={nav.migration}
+            onSelectEdge={(e) => { setSelectedNodeKey(null); setSelectedEdge(e); }}
+            onSetDirection={nav.setEdgeDirection}
+            onBlockEdge={(a, b) => nav.toggleLink(a, b)}
+            places={navPlaces} robotPos={robotPos ? { x: robotPos.x, y: robotPos.y } : null}
+            onConfirmDoor={(doorId, dir) => { if (doorPair) nav.addDoorEdge(doorPair[0], doorPair[1], doorId, dir); setDoorPair(null); }}
+            onCancelDoor={() => setDoorPair(null)}
+            onPreview={nav.preview}
+            onPreviewShown={setNodeRoute}
+            onReset={() => { nav.reload(); setSelectedNodeKey(null); }}
+            onSave={async () => { const err = await nav.save(); if (err) modalAlert(err); }}
+            onClose={resetNodeMode}
+          />
+
+          <PathBuildPanel
+            isOpen={isPathBuildMode}
+            pathBuildName={pathBuildName}
+            setPathBuildName={setPathBuildName}
+            pathBuildWorkType={pathBuildWorkType}
+            setPathBuildWorkType={setPathBuildWorkType}
+            pathBuildOrder={pathBuildOrder}
+            setPathBuildOrder={setPathBuildOrder}
+            pathBuildWaits={pathBuildWaits}
+            setPathBuildWaits={setPathBuildWaits}
+            placeCoordMap={placeCoordMap}
+            onCancel={() => {
+              setIsPathBuildMode(false);
+              setPathBuildOrder([]);
+              setPathBuildWaits([]);
+              setRightPanelOpen(true);
+            }}
+            onSave={handleSavePath}
+          />
+        </div>
+      </div>}
+
+      <MappingStartModal
+        isOpen={mappingState === "startModal"}
+        businesses={businesses}
+        startBizId={startBizId}
+        startBizNew={startBizNew}
+        startBizMode={startBizMode}
+        startFloorId={startFloorId}
+        startFloorNew={startFloorNew}
+        startFloorMode={startFloorMode}
+        startFloors={startFloors}
+        startMapName={startMapName}
+        startMapNameChecked={startMapNameChecked}
+        setStartBizNew={setStartBizNew}
+        setStartBizMode={setStartBizMode}
+        setStartFloorId={setStartFloorId}
+        setStartFloorNew={setStartFloorNew}
+        setStartFloorMode={setStartFloorMode}
+        setStartMapName={setStartMapName}
+        setStartMapNameChecked={setStartMapNameChecked}
+        onStartBizChange={handleStartBizChange}
+        onCheckMapName={handleCheckMapName}
+        onConfirm={handleConfirmMappingStart}
+        onCancel={() => setMappingState("idle")}
+      />
+
+      <MappingProgressModal
+        isOpen={mappingState === "mappingModal"}
+        isMappingRunning={isMappingRunning}
+        isMappingStarting={isMappingStarting}
+        isMappingEnding={isMappingEnding}
+        isMappingCanceling={isMappingCanceling}
+        saveMapName={saveMapName}
+        mappingCanvasRef={mappingCanvasRef}
+        robotId={connectedRobots[0]?.id ?? null}
+        onStart={handleMappingRun}
+        onEnd={handleMappingEnd}
+        onCancel={handleMappingCancel}
+        onAlert={modalAlert}
+      />
+
+      <MappingSuccessModal
+        isOpen={mappingState === "success"}
+        onConfirm={handleSuccessConfirm}
+      />
+
+      {/* ── 저장 모달 ── */}
+      {mappingState === "saveModal" && (
+        <div className={styles.modalOverlay}>
+          <div className={styles.modal}>
+            <div className={styles.modalTitle}>맵 저장</div>
+
+            <div className={styles.formGroup}>
+              <label>사업장</label>
+              <select
+                value={saveBizId}
+                onChange={(e) => {
+                  setSaveBizId(Number(e.target.value));
+                  setSaveFloorId("");
+                }}
+              >
+                <option value="">사업장 선택</option>
+                {businesses.map((b) => (
+                  <option key={b.id} value={b.id}>{b.BusinessName}</option>
+                ))}
+              </select>
+            </div>
+
+            <div className={styles.formGroup}>
+              <label>층</label>
+              <select
+                value={saveFloorId}
+                onChange={(e) => setSaveFloorId(Number(e.target.value))}
+              >
+                <option value="">층 선택</option>
+                {floors.map((a) => (
+                  <option key={a.id} value={a.id}>{a.FloorName}</option>
+                ))}
+              </select>
+            </div>
+
+            <div className={styles.formGroup}>
+              <label>영역 이름</label>
+              <input
+                type="text"
+                placeholder="영역 이름을 입력하세요"
+                value={saveMapName}
+                onChange={(e) => setSaveMapName(e.target.value)}
+              />
+            </div>
+
+            <div className={styles.modalBtns}>
+              <button className={styles.btnCancel} onClick={handleCancelSave}>
+                취소
+              </button>
+              <button className={styles.btnConfirm} onClick={handleSaveMap}>
+                확인
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── 로봇 연결 모달 ── */}
+      <RobotConnectModal
+        isOpen={showRobotModal}
+        robots={robots}
+        connectedRobots={connectedRobots}
+        selectedConnectIds={selectedConnectIds}
+        setSelectedConnectIds={setSelectedConnectIds}
+        selectedMap={selectedMap}
+        onClose={() => setShowRobotModal(false)}
+        onConnect={handleConnectIds}
+        onDisconnect={handleDisconnectIds}
+        onRefresh={handleRefreshRobotList}
+        checking={connectChecking}
+        loading={robotListLoading}
+      />
+      <ImportMapModal
+        isOpen={showImportModal}
+        robots={importRobots}
+        floors={floors}
+        defaultBizId={selectedBiz}
+        defaultFloorId={selectedFloor}
+        onClose={() => setShowImportModal(false)}
+        onImported={handleImported}
+      />
+      <MapSyncModal
+        isOpen={showSyncModal}
+        syncRobots={syncRobots}
+        selectedSyncIds={selectedSyncIds}
+        setSelectedSyncIds={setSelectedSyncIds}
+        onClose={() => setShowSyncModal(false)}
+        onConfirm={handleSyncConfirm}
+      />
+      <MapSyncProgressModal
+        isOpen={showSyncProgressModal}
+        states={syncProgressStates}
+      />
+
+      {/* ── 장소 수정 모달 (등록과 동일한 MapPlaceCreateModal 재사용) ── */}
+      {editPlaceData && (
+        <MapPlaceCreateModal
+          isOpen={!!editPlaceData}
+          mode="edit"
+          worldX={editPlaceData.x}
+          worldY={editPlaceData.y}
+          pixelX={0}
+          pixelY={0}
+          mapId={editPlaceData.mapId ?? undefined}
+          editData={editPlaceData}
+          floors={floors}
+          usedNames={usedPlaceNames}
+          onClose={() => setEditPlaceData(null)}
+          onConfirm={(place, oldNameArg) => {
+            const key = place.tempId;
+            const trimmed = place.LacationName.trim();
+            if (!trimmed) { setEditPlaceData(null); return; }
+            const oldName = oldNameArg ?? editPlaceData.name;
+            const nameChanged = trimmed !== oldName;
+            const newYaw = place.Yaw;
+            const newDesc = place.Imformation ?? "";
+            const newCategory = place.Category;
+            const newFloorId = place.FloorId;
+            const newRobot = place.RobotName;
+
+            // 되돌리기로 이 수정만 취소할 수 있게 수정 전 상태를 남긴다.
+            setUndoStack((prev) => [...prev, {
+              type: "editPlace",
+              prevMapPlaces: mapPlaces,
+              prevPendingPlaces: pendingPlaces,
+              prevPendingRoutes: pendingRoutes,
+              prevDbRoutes: dbRoutes,
+              prevMovedPlaces: movedPlaces,
+              prevModifiedDbIds: modifiedDbIds,
+              prevYawPinnedPlaces: yawPinnedPlaces,
+            }]);
+
+            // 이름 변경 전파 (장소/경로 참조 갱신)
+            if (nameChanged) {
+              setMapPlaces((prev) => prev.map((p) => p.LacationName === oldName ? { ...p, LacationName: trimmed } : p));
+              setPendingPlaces((prev) => prev.map((p) => p.LacationName === oldName ? { ...p, LacationName: trimmed } : p));
+              setMovedPlaces((prev) => {
+                const moved = prev.get(oldName);
+                if (!moved) return prev;
+                const next = new Map(prev); next.delete(oldName); next.set(trimmed, moved); return next;
+              });
+              setPendingRoutes((prev) => prev.map((r) => ({ ...r, startName: r.startName === oldName ? trimmed : r.startName, endName: r.endName === oldName ? trimmed : r.endName })));
+              setDbRoutes((prev) => prev.map((r) => ({ ...r, StartPlaceName: r.StartPlaceName === oldName ? trimmed : r.StartPlaceName, EndPlaceName: r.EndPlaceName === oldName ? trimmed : r.EndPlaceName })));
+            }
+
+            // 방향을 직접 바꿨으면 이후 드래그에서도 유지한다(이름 변경도 따라간다).
+            const yawChanged = newYaw !== editPlaceData.yaw;
+            setYawPinnedPlaces((prev) => {
+              if (!yawChanged && !(nameChanged && prev.has(oldName))) return prev;
+              const next = new Set(prev);
+              next.delete(oldName);
+              next.add(trimmed);
+              return next;
+            });
+
+            // 방향/설명/카테고리/층/로봇 업데이트 (좌표는 드래그로만 변경)
+            setMapPlaces((prev) => prev.map((p) => p.LacationName === trimmed
+              ? { ...p, Yaw: newYaw, Imformation: newDesc, Category: newCategory, FloorId: newFloorId ?? p.FloorId, RobotName: newRobot ?? p.RobotName } : p));
+            setPendingPlaces((prev) => prev.map((p) => p.LacationName === trimmed
+              ? { ...p, Yaw: newYaw, Imformation: newDesc, Category: newCategory, FloorId: newFloorId ?? p.FloorId, RobotName: newRobot ?? p.RobotName } : p));
+
+            // DB 장소면 저장 대상(movedPlaces)에 넣어 PUT 트리거 (좌표는 기존값 유지)
+            if (key.startsWith("db_")) {
+              const dbId = Number(key.replace("db_", ""));
+              setModifiedDbIds((prev) => new Set(prev).add(dbId));
+              setMovedPlaces((prev) => {
+                if (prev.has(trimmed)) return prev;
+                const next = new Map(prev);
+                next.set(trimmed, { x: editPlaceData.x, y: editPlaceData.y });
+                return next;
+              });
+            }
+
+            setEditPlaceData(null);
+          }}
+        />
+      )}
+
+      {/* ── 장소 삭제 확인 팝업 ── */}
+      {deleteConfirmTarget && (
+        <div
+          style={{
+            position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)",
+            display: "flex", alignItems: "center", justifyContent: "center", zIndex: 90,
+          }}
+          onClick={() => setDeleteConfirmTarget(null)}
+        >
+          <div
+            style={{
+              background: "var(--surface-3)", borderRadius: 12, padding: "20px 28px",
+              minWidth: 300, boxShadow: "0 8px 32px rgba(0,0,0,0.35)", textAlign: "center",
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ fontSize: "var(--font-size-lg)", color: "var(--text-primary)", marginBottom: 6 }}>
+              {deleteConfirmTarget.type.startsWith("route") ? "구간 삭제" : "장소 삭제"}
+            </div>
+            <div style={{ fontSize: "var(--font-size-md)", color: "var(--text-secondary)", marginBottom: 20 }}>
+              {deleteConfirmTarget.type.startsWith("route")
+                ? <><strong>{deleteConfirmTarget.name}</strong> 구간을 삭제하시겠습니까?</>
+                : <><strong>{deleteConfirmTarget.name}</strong>을(를) 삭제하시겠습니까?</>
+              }
+            </div>
+            <div style={{ display: "flex", justifyContent: "center", gap: 12 }}>
+              <button
+                onClick={() => setDeleteConfirmTarget(null)}
+                style={{
+                  width: 110, height: 34, borderRadius: 8, border: "1px solid var(--border-input)",
+                  background: "var(--surface-5)", color: "var(--text-primary)", cursor: "pointer",
+                  fontSize: "var(--font-size-md)",
+                }}
+              >
+                취소
+              </button>
+              <button
+                onClick={() => {
+                  const t = deleteConfirmTarget.type;
+                  if (t === "db" || t === "pending") {
+                    // 삭제할 장소명 찾기
+                    const placeName = deleteConfirmTarget.name;
+                    // 연결된 DB 구간 찾아서 삭제 표시
+                    const cascadedDb = dbRoutes
+                      .filter((r) => !deletedRouteDbIds.has(r.id) && (r.StartPlaceName === placeName || r.EndPlaceName === placeName))
+                      .map((r) => r.id);
+                    if (cascadedDb.length > 0)
+                      setDeletedRouteDbIds((prev) => { const next = new Set(prev); cascadedDb.forEach((id) => next.add(id)); return next; });
+                    // 연결된 pending 구간 찾아서 제거
+                    const cascadedPending = pendingRoutes.filter((r) => r.startName === placeName || r.endName === placeName);
+                    if (cascadedPending.length > 0)
+                      setPendingRoutes((prev) => prev.filter((r) => r.startName !== placeName && r.endName !== placeName));
+
+                    if (t === "db") {
+                      setDeletedDbIds((prev) => new Set(prev).add(deleteConfirmTarget.id as number));
+                      setUndoStack((prev) => [...prev, { type: "deleteDbPlace", id: deleteConfirmTarget.id as number, cascadedDbRoutes: cascadedDb, cascadedPendingRoutes: cascadedPending }]);
+                    } else {
+                      const removed = pendingPlaces.find((p) => p.tempId === deleteConfirmTarget.id);
+                      setPendingPlaces((prev) => prev.filter((p) => p.tempId !== deleteConfirmTarget.id));
+                      if (removed) setUndoStack((prev) => [...prev, { type: "deletePendingPlace", place: removed, cascadedDbRoutes: cascadedDb, cascadedPendingRoutes: cascadedPending }]);
+                    }
+                  } else if (t === "route_db") {
+                    setDeletedRouteDbIds((prev) => new Set(prev).add(deleteConfirmTarget.id as number));
+                    setUndoStack((prev) => [...prev, { type: "deleteDbRoute", id: deleteConfirmTarget.id as number }]);
+                  } else if (t === "route_pending") {
+                    const removed = pendingRoutes.find((r) => r.tempId === deleteConfirmTarget.id);
+                    setPendingRoutes((prev) => prev.filter((r) => r.tempId !== deleteConfirmTarget.id));
+                    if (removed) setUndoStack((prev) => [...prev, { type: "deletePendingRoute", route: removed }]);
+                  }
+                  setDeleteConfirmTarget(null);
+                }}
+                style={{
+                  width: 110, height: 34, borderRadius: 8, border: "1px solid var(--color-error-border)",
+                  background: "var(--color-error-bg)", color: "var(--text-primary)", cursor: "pointer",
+                  fontSize: "var(--font-size-md)",
+                }}
+              >
+                삭제
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── 장소 생성 모달 ── */}
+      {showPlaceModal && placeClickCoords && (
+        <MapPlaceCreateModal
+          isOpen={showPlaceModal}
+          mode="create"
+          nodeAttach={placeNodeAttach}
+          nodeChoice={placeNodeChoice}
+          onNodeChoice={setPlaceNodeChoice}
+          onAfterConfirm={(place) => {
+            if (!placeNodeAttach || placeNodeAttach.nodeKey) return;
+            if (placeNodeChoice === "auto") {
+              void nav.checkSpot(place.LocationX, place.LocationY).then((why) => {
+                if (!why) { nav.addNode(place.LocationX, place.LocationY); return; }
+                modalAlert(`장소 자리에는 노드를 둘 수 없어 노드 추가 모드로 바꿉니다 — ${why} 근처 흰 바닥을 눌러 노드를 놓으세요.`);
+                clearAllModes();
+                setIsNodeMode(true);
+                setNodeTool("add");
+              });
+            } else if (placeNodeChoice === "manual") {
+              clearAllModes();
+              setIsNodeMode(true);
+              setNodeTool("add");
+            }
+          }}
+          worldX={placeClickCoords.worldX}
+          worldY={placeClickCoords.worldY}
+          pixelX={placeClickCoords.pixelX}
+          pixelY={placeClickCoords.pixelY}
+          mapId={selectedMap !== "" ? (selectedMap as number) : undefined}
+          defaultRobotName={connectedRobots[0]?.RobotName ?? ""}
+          defaultFloor={
+            selectedFloor !== ""
+              ? floors.find((a) => a.id === selectedFloor)?.FloorName ?? ""
+              : ""
+          }
+          floors={floors}
+          usedNames={usedPlaceNames}
+          lockCoords={isFromRobotPos}
+          defaultYaw={isFromRobotPos && robotPos ? robotPos.yaw : undefined}
+          defaultCategory={isChargeCreate ? "charge" : undefined}
+          onClose={() => {
+            setShowPlaceModal(false);
+            setPlaceClickCoords(null);
+            setIsFromRobotPos(false);
+            setIsChargeCreate(false);
+          }}
+          onConfirm={(place) => {
+            // 충전소/장소를 pending 으로 추가 (상단 저장 버튼에서 일괄 DB 반영).
+            // A안: 충전소는 로봇 실제 충전 위치로 저장되며, 도킹 포인트는 따로 만들지 않고
+            // 저장 직후 '도킹 포인트 설정' 단계로 넘어가 로봇 실제 도킹 위치로 캡처한다.
+            setPendingPlaces((prev) => [...prev, place]);
+            setUndoStack((prev) => [...prev, { type: "addPlace", tempId: place.tempId }]);
+            if (isRouteMode && routeStartName) {
+              setRouteEndName(place.LacationName);
+            }
+            const wasCharge = isChargeCreate;
+            const chargeName = place.LacationName;
+            setShowPlaceModal(false);
+            setPlaceClickCoords(null);
+            setIsFromRobotPos(false);
+            setIsChargeCreate(false);
+            if (wasCharge) {
+              setChargeDockSetup({ chargeName });
+            }
+          }}
+        />
+      )}
+
+      {/* 충전소 생성(A안) → 도킹 포인트 설정 안내 모달 */}
+      {chargeDockSetup && (
+        <div className={styles.startOverlay}>
+          <div className={styles.robotModal} onClick={(e) => e.stopPropagation()} style={{ maxWidth: 460 }}>
+            <div className={styles.startHeader}>
+              <div className={styles.startHeaderLeft}>
+                <img src="/icon/robot_w.png" alt="" />
+                <h2>도킹 포인트 설정</h2>
+              </div>
+              <button className={styles.startCloseBtn} onClick={() => setChargeDockSetup(null)}>
+                &times;
+              </button>
+            </div>
+
+            <div className={styles.robotBody}>
+              <p style={{ lineHeight: 1.7, fontSize: "var(--font-size-sm)", margin: "4px 0 16px" }}>
+                충전소 <b>{chargeDockSetup.chargeName}</b> 가 추가되었습니다.<br />
+                이제 <b>도킹 포인트</b>를 설정합니다.
+              </p>
+              <ol style={{ margin: "0 0 16px", paddingLeft: 18, lineHeight: 1.8, fontSize: "var(--font-size-sm)", color: "var(--text-secondary)" }}>
+                <li>컨트롤러로 <b>충전을 해제</b>하고 로봇을 <b>도킹 포인트</b>(충전 해제 후 서는 위치)에 정위치시키세요.</li>
+                <li>아래 충전 상태가 <b>해제됨</b>으로 바뀌면 <b>[도킹 포인트 생성]</b>을 누르세요.</li>
+              </ol>
+
+              {/* 충전 상태(언도킹) 실시간 표시 */}
+              <div style={{
+                display: "flex", alignItems: "center", gap: 8,
+                padding: "10px 14px", borderRadius: 8, marginBottom: 10,
+                background: "var(--surface-3)", fontSize: "var(--font-size-sm)",
+              }}>
+                <span style={{ color: "var(--text-secondary)" }}>현재 충전 상태:</span>
+                {dockSetupCharging === null ? (
+                  <b style={{ color: "var(--text-tertiary)" }}>확인 중...</b>
+                ) : dockSetupCharging ? (
+                  <b style={{ color: "#FF9800" }}>충전 중 (도크에 있음 — 해제 필요)</b>
+                ) : (
+                  <b style={{ color: "#4CAF50" }}>해제됨 (도킹 포인트 캡처 가능)</b>
+                )}
+              </div>
+
+              {/* 현재 로봇 좌표 미리보기 */}
+              <div style={{ fontSize: "var(--font-size-xs)", color: "var(--text-tertiary)" }}>
+                {robotPos
+                  ? `현재 로봇 좌표: (${robotPos.x.toFixed(3)}, ${robotPos.y.toFixed(3)})`
+                  : "로봇 위치 수신 대기 중..."}
+              </div>
+            </div>
+
+            <div className={styles.startFooter}>
+              <button
+                className={styles.startFooterBtn + " " + styles.startBtnCancel}
+                onClick={() => setChargeDockSetup(null)}
+              >
+                나중에
+              </button>
+              <button
+                className={styles.startFooterBtn}
+                disabled={dockSetupCharging === true || !robotPos}
+                style={{
+                  background: dockSetupCharging === true || !robotPos ? "var(--surface-4)" : "var(--color-info-bg)",
+                  color: "var(--text-primary)",
+                  opacity: dockSetupCharging === true || !robotPos ? 0.5 : 1,
+                  cursor: dockSetupCharging === true || !robotPos ? "not-allowed" : "pointer",
+                }}
+                onClick={handleCreateDockPoint}
+                title={dockSetupCharging === true ? "충전을 먼저 해제하세요" : ""}
+              >
+                도킹 포인트 생성
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+    </div>
+    <MapAlertModal
+      open={modal.open}
+      message={modal.message}
+      mode={modal.mode}
+      onConfirm={modal.mode === "alert" ? closeModal : handleConfirm}
+      onClose={closeModal}
+    />
+    </PermissionGuard>
+  );
+}

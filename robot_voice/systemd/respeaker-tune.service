@@ -1,0 +1,22 @@
+# reSpeaker XVF3800 재열거 시 운영 파라미터 재적용 + robot-voice 재기동.
+#
+# udev 가 보드를 감지하면(ACTION=="add") 이 유닛을 깨운다 —
+# 99-respeaker-xvf3800-tune.rules 의 SYSTEMD_WANTS 참조.
+#
+# 왜: 보드가 설정을 플래시에 저장하지 않아 재열거마다 공장값으로 돌아가고,
+#     ALSA 카드 인덱스도 밀린다(2026-09-29: card 1 → card 4).
+#     상세 근거는 respeaker_tune.sh 머리말에 있다.
+[Unit]
+Description=reSpeaker XVF3800 runtime tuning (USB 재열거마다 재적용)
+After=sound.target
+# 보드가 없을 때 무한 재시도로 로그를 채우지 않는다.
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=oneshot
+# xvf_host 는 USB 제어 인터페이스를, systemctl try-restart 는 유닛 제어를 쓴다 → root.
+ExecStart=/usr/local/sbin/respeaker_tune.sh
+RemainAfterExit=no
+StandardOutput=journal
+StandardError=journal

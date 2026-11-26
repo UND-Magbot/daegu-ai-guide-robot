@@ -1,0 +1,373 @@
+.header {
+    padding: 0 30px;
+    width: 100%;
+    background-color: var(--surface-1);
+    height: 80px;
+    color: var(--text-primary);
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 50;
+}
+
+
+/* header 스타일 */
+.alarm-icon {
+    display: flex;
+    gap: 24px;
+}
+.alarm {
+    position: relative;
+}
+
+.alarm-icon > button {
+    border: none;
+    background: transparent;
+}
+
+.stopAllBtn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    border-radius: 6px;
+    padding: 6px 14px;
+    background-color: var(--color-error, #e53e3e) !important;
+    color: #fff;
+    font-size: var(--font-size-sm);
+    font-weight: 600;
+    white-space: nowrap;
+    transition: opacity 0.15s ease;
+}
+
+.stopAllBtn:hover {
+    opacity: 0.8;
+}
+
+.stopAllBtnDisabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+.stopAllBtnDisabled:hover {
+    opacity: 0.4;
+}
+
+.alarmBegs {
+    width: 15px;
+    max-width: 20px;
+    height: 15px;
+
+    border-radius: 50px;
+    border: 1px solid var(--surface-1);
+
+    background: var(--color-error);
+    color: var(--text-primary);
+    font-size: var(--font-size-2xs);
+
+    position: absolute;
+    top: -2px;
+    left: 16px;
+
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+
+.alarm-icon button,
+.schedule div img,
+.lacation div img {
+    width: auto;
+    height: 28px;
+}
+
+.alarm img,
+.schedule div img {
+    cursor: pointer;
+}
+
+.admin-img {
+    width: var(--icon-lg);
+    height: var(--icon-lg);
+    margin-right: 8px;
+}
+
+.logo-img {
+    height: 30px;
+    margin-right: 10px;
+}
+
+.logo-img img {
+    height: 100%;
+    width: auto;
+}
+
+.logoTitle {
+    font-size: var(--font-size-4xl);
+    font-weight: 600;
+}
+
+.logo-img img,
+.alarm-icon img,
+.admin-img img {
+    height: 100%;
+}
+
+.alarm, .schedule {
+    position: relative;
+}
+
+.schedule span {
+    position: absolute;
+    font-size: var(--font-size-sm);
+    font-weight: 600;
+}
+
+.alarm span,
+.schedule span {
+    top: 0;
+    right: 4px;
+}
+
+.new-time {
+    font-size: var(--font-size-md);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    opacity: 0.7;
+}
+
+.alertWrapper {
+    position: relative;
+}
+
+.adminWrapper {
+    position: relative;
+}
+
+.admin {
+    height: 44px;
+    padding: 8px 16px;
+    background-color: var(--surface-5);
+    border-radius: 8px;
+    font-size: var(--font-size-md);
+    color: var(--text-primary);
+    font-weight: 500;
+    border: none;
+    cursor: pointer;
+    transition: background-color 0.15s ease;
+
+    display: flex;
+    align-items: center;
+}
+
+.admin:hover {
+    background-color: var(--surface-elevated);
+}
+
+.admin:focus-visible {
+    outline: 2px solid var(--color-info);
+    outline-offset: 2px;
+}
+
+/* 관리자 드롭다운 메뉴 */
+.adminDropdown {
+    position: absolute;
+    top: calc(100% + 8px);
+    right: 0;
+    min-width: 200px;
+    background: var(--surface-3);
+    border: 1px solid var(--border-subtle);
+    border-radius: 8px;
+    z-index: 100;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+    animation: adminFadeIn 0.15s ease;
+    overflow: hidden;
+}
+
+@keyframes adminFadeIn {
+    from { opacity: 0; transform: translateY(-4px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+.adminMenuItem {
+    width: 100%;
+    padding: 12px 16px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    border: none;
+    background: transparent;
+    color: var(--text-primary);
+    font-size: var(--font-size-md);
+    cursor: pointer;
+    transition: background-color 0.15s ease;
+}
+
+.adminMenuItem:hover {
+    background: var(--surface-elevated);
+}
+
+.adminMenuItem:focus-visible {
+    outline: 2px solid var(--color-info);
+    outline-offset: -2px;
+}
+
+.adminMenuIcon {
+    width: 18px;
+    height: 18px;
+}
+
+.hamburgerBtn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 40px;
+    height: 40px;
+    border: none;
+    background: transparent;
+    color: var(--text-primary);
+    border-radius: 8px;
+    cursor: pointer;
+    margin-right: 12px;
+    transition: background-color 0.15s ease;
+}
+
+.hamburgerBtn:hover {
+    background-color: var(--surface-5);
+}
+
+.container-flex {
+    height: 100%;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    white-space: nowrap;
+}
+
+.lrDivFlex {
+    display: flex;
+    align-items: center;
+    flex-shrink: 0;
+}
+
+.rAlign {
+    gap: 24px;
+    justify-content: flex-end;
+}
+
+
+.sidebar {
+    width: var(--sidebar-width);
+    font-size: var(--font-size-lg);
+    background-color: var(--surface-1);
+    color: var(--text-primary);
+
+    position: fixed;
+    top: var(--header-height);
+    left: 0;
+    bottom: 0;
+    z-index: 60;
+    overflow-y: auto;
+    overflow-x: hidden;
+
+    padding: 20px 0;
+    box-sizing: border-box;
+    display: flex;
+    justify-content: space-between;
+    flex-direction: column;
+    align-items: flex-start;
+
+    transform: translateX(-100%);
+    transition: transform 0.25s ease;
+    will-change: transform;
+}
+
+.sidebarOpen {
+    transform: translateX(0);
+}
+
+.sidebarBackdrop {
+    position: fixed;
+    inset: 0;
+    top: var(--header-height);
+    z-index: 55;
+    background: rgba(0, 0, 0, 0.4);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.25s ease;
+}
+
+.sidebarBackdropOpen {
+    opacity: 1;
+    pointer-events: auto;
+}
+
+.sidebar div {
+    width: 100%;
+    list-style: none;
+    padding: 0;
+}
+
+.sidebar div .menuItems {
+    padding: 10px 0 10px 24px;
+    cursor: pointer;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.sidebar .menuItems div {
+    width: var(--icon-lg);
+    height: var(--icon-lg);
+    min-width: var(--icon-lg);
+    margin-right: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.sidebar .menuItems div img {
+    width: 24px;
+    height: 24px;
+    object-fit: contain;
+}
+
+.iconWrap {
+    position: relative;
+}
+
+.iconDefault,
+.iconHover {
+    transition: opacity 0.2s ease;
+}
+
+.iconDefault {
+    opacity: 1;
+}
+
+.iconHover {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    opacity: 0;
+}
+
+.sidebar div .menuItems:hover .iconDefault,
+.sidebar div .menuItems:active .iconDefault {
+    opacity: 0;
+}
+
+.sidebar div .menuItems:hover .iconHover,
+.sidebar div .menuItems:active .iconHover {
+    opacity: 1;
+}
+
+.sidebar div .menuItems:hover, .sidebar div .menuItems:active {
+    background-color: var(--text-primary);
+    color: var(--text-inverse);
+}
